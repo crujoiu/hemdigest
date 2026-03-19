@@ -1,6 +1,5 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
-import digestPageScript from "../lib/digest-page.ts?url";
 
 const pageTitle = "Hematology Digest | Latest Research & News";
 ---
@@ -74,5 +73,7 @@ const pageTitle = "Hematology Digest | Latest Research & News";
     </div>
   </noscript>
 
-  <script type="module" src={digestPageScript}></script>
+  <script>
+    import "../lib/digest-page";
+  </script>
 </BaseLayout>
