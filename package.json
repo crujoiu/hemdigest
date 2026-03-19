@@ -1,0 +1,17 @@
+{
+  "name": "hematology-digest",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx netlify dev",
+    "dev:astro": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@netlify/functions": "^4.2.1",
+    "astro": "^5.13.5",
+    "fast-xml-parser": "^5.5.7"
+  }
+}

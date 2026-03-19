@@ -1,0 +1,78 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import digestPageScript from "../lib/digest-page.ts?url";
+
+const pageTitle = "Hematology Digest | Latest Research & News";
+---
+
+<BaseLayout title={pageTitle} description="Hematology research, journals, and specialty news in one digest.">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <div id="loading-overlay" class="loading-overlay" aria-live="polite" aria-busy="true" role="status">
+    <div class="loading-overlay__content">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <p class="loading-overlay__label">Loading hematology digest</p>
+    </div>
+  </div>
+
+  <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
+    <span class="theme-toggle__track">
+      <span class="theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true">Sun</span>
+      <span class="theme-toggle__thumb"></span>
+      <span class="theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true">Moon</span>
+    </span>
+  </button>
+
+  <main class="page-shell" id="main-content">
+    <section class="hero">
+      <div class="hero__content">
+        <p class="hero__eyebrow">Clinical Briefing</p>
+        <h1 id="digest-title">Hematology Digest</h1>
+        <p class="hero__tagline" id="digest-tagline">
+          Loading hematology research, publications, and news from the backend.
+        </p>
+        <p class="hero__lede">
+          A curated hematology briefing covering recent PubMed research, journal articles, and specialty news.
+        </p>
+        <div class="hero__stats">
+          <div class="hero__stat">
+            <span class="hero__stat-label">Updated</span>
+            <strong id="digest-updated">Loading</strong>
+          </div>
+          <div class="hero__stat">
+            <span class="hero__stat-label">Entries</span>
+            <strong id="digest-total">0</strong>
+          </div>
+          <div class="hero__stat">
+            <span class="hero__stat-label">Coverage</span>
+            <strong id="digest-coverage">0 streams</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="section-nav" aria-label="Digest sections" id="section-nav">
+      <span class="section-nav__link">Loading sections…</span>
+    </nav>
+
+    <div id="digest-error" class="empty-state is-hidden" role="alert"></div>
+    <div id="digest-sections" aria-live="polite"></div>
+  </main>
+
+  <button id="back-to-top" class="back-to-top is-hidden" type="button" aria-label="Back to top">
+    Top
+  </button>
+
+  <footer class="site-footer">
+    <p>Built with Astro and backed by a small TypeScript API.</p>
+    <p>For educational and informational purposes only. Always verify against primary sources.</p>
+  </footer>
+
+  <noscript>
+    <div class="noscript-banner">
+      JavaScript is required to load the live digest content from the backend API.
+    </div>
+  </noscript>
+
+  <script type="module" src={digestPageScript}></script>
+</BaseLayout>

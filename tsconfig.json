@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "allowJs": true,
+    "strict": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "baseUrl": ".",
+    "types": ["astro/client"]
+  },
+  "include": [
+    ".astro/types.d.ts",
+    "**/*.ts",
+    "**/*.mts",
+    "**/*.astro"
+  ],
+  "exclude": ["dist", "node_modules"]
+}
