@@ -48,7 +48,8 @@ function hasDigestPageElements(): boolean {
     "preset-filter",
     "bookmarks-toggle",
     "new-toggle",
-    "clear-filters"
+    "clear-filters",
+    "active-filters"
   ];
 
   return requiredIds.every((id) => document.getElementById(id));
@@ -101,12 +102,25 @@ function renderEntryTags(values: string[], className: string): string {
     .join("");
 }
 
+function renderOverflowTag(count: number, className: string): string {
+  if (count <= 0) {
+    return "";
+  }
+
+  return `<span class="${className} ${className}--overflow">+${count}</span>`;
+}
+
 function renderEntries(entries: DigestEntry[]): string {
   return entries
     .map(
       (entry) => {
-        const taxonomyTags = [...entry.contentTypes, ...entry.audiences].slice(0, 4);
+        const visibleTopics = entry.topics.filter((topic) => topic !== "general").slice(0, 2);
+        const hiddenTopicCount = Math.max(entry.topics.filter((topic) => topic !== "general").length - visibleTopics.length, 0);
+        const taxonomyTags = [...entry.contentTypes, ...entry.audiences];
+        const visibleTaxonomyTags = taxonomyTags.slice(0, 3);
+        const hiddenTaxonomyCount = Math.max(taxonomyTags.length - visibleTaxonomyTags.length, 0);
         const evidenceSummary = [
+          titleCase(entry.evidence.level),
           entry.evidence.studyType,
           entry.evidence.phase,
           entry.evidence.sampleSize ? `n=${entry.evidence.sampleSize}` : ""
@@ -120,8 +134,8 @@ function renderEntries(entries: DigestEntry[]): string {
           <div class="entry-card__topline">
             <div class="entry-card__badges">
               <span class="entry-card__badge entry-card__badge--${escapeAttribute(entry.type)}">${escapeHtml(entry.type)}</span>
-              <span class="entry-card__evidence">${escapeHtml(titleCase(entry.evidence.level))}</span>
-              ${renderEntryTags(entry.topics.filter((topic) => topic !== "general"), "entry-card__tag")}
+              ${renderEntryTags(visibleTopics, "entry-card__tag")}
+              ${renderOverflowTag(hiddenTopicCount, "entry-card__tag")}
             </div>
             <button class="entry-card__bookmark" type="button" data-entry-id="${escapeAttribute(entry.id)}" aria-pressed="false">
               Save
@@ -133,9 +147,13 @@ function renderEntries(entries: DigestEntry[]): string {
           </h3>
 
           <p class="entry-card__summary">${escapeHtml(entry.summary)}</p>
-          <p class="entry-card__why">${escapeHtml(entry.whyItMatters.summary)}</p>
+          <div class="entry-card__why-block">
+            <p class="entry-card__why-label">Why it matters</p>
+            <p class="entry-card__why">${escapeHtml(entry.whyItMatters.summary)}</p>
+          </div>
           <div class="entry-card__taxonomy">
-            ${renderEntryTags(taxonomyTags, "entry-card__taxonomy-tag")}
+            ${renderEntryTags(visibleTaxonomyTags, "entry-card__taxonomy-tag")}
+            ${renderOverflowTag(hiddenTaxonomyCount, "entry-card__taxonomy-tag")}
           </div>
 
           <div class="entry-card__meta entry-card__meta--primary">
@@ -338,6 +356,83 @@ function scrollToSection(sectionId: string): void {
   }
 
   section.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderActiveFilters(target: HTMLElement, filterState: FilterState, digest: DigestPayload | null): void {
+  const chips: string[] = [];
+  const activePreset = digest?.overview.savedPresetSuggestions.find((preset) => preset.id === filterState.activePresetId);
+
+  if (activePreset) {
+    chips.push(`
+      <button class="active-filters__chip" type="button" data-filter-key="preset">
+        <span>Preset: ${escapeHtml(activePreset.label)}</span>
+        <span aria-hidden="true">Remove</span>
+      </button>
+    `);
+  } else {
+    if (filterState.topic !== "all") {
+      chips.push(`
+        <button class="active-filters__chip" type="button" data-filter-key="topic">
+          <span>Topic: ${escapeHtml(titleCase(filterState.topic))}</span>
+          <span aria-hidden="true">Remove</span>
+        </button>
+      `);
+    }
+
+    if (filterState.contentType !== "all") {
+      chips.push(`
+        <button class="active-filters__chip" type="button" data-filter-key="contentType">
+          <span>Content: ${escapeHtml(titleCase(filterState.contentType))}</span>
+          <span aria-hidden="true">Remove</span>
+        </button>
+      `);
+    }
+
+    if (filterState.audience !== "all") {
+      chips.push(`
+        <button class="active-filters__chip" type="button" data-filter-key="audience">
+          <span>Audience: ${escapeHtml(titleCase(filterState.audience))}</span>
+          <span aria-hidden="true">Remove</span>
+        </button>
+      `);
+    }
+  }
+
+  if (filterState.search) {
+    chips.push(`
+      <button class="active-filters__chip" type="button" data-filter-key="search">
+        <span>Search: ${escapeHtml(filterState.search)}</span>
+        <span aria-hidden="true">Remove</span>
+      </button>
+    `);
+  }
+
+  if (filterState.bookmarksOnly) {
+    chips.push(`
+      <button class="active-filters__chip" type="button" data-filter-key="bookmarksOnly">
+        <span>Bookmarks only</span>
+        <span aria-hidden="true">Remove</span>
+      </button>
+    `);
+  }
+
+  if (filterState.newOnly) {
+    chips.push(`
+      <button class="active-filters__chip" type="button" data-filter-key="newOnly">
+        <span>New since last visit</span>
+        <span aria-hidden="true">Remove</span>
+      </button>
+    `);
+  }
+
+  if (chips.length === 0) {
+    target.classList.add("is-hidden");
+    target.innerHTML = "";
+    return;
+  }
+
+  target.classList.remove("is-hidden");
+  target.innerHTML = chips.join("");
 }
 
 function renderSection(section: DigestSection, pageIndex: number): string {
@@ -601,6 +696,7 @@ export function initDigestPage(endpoint = "/api/digest"): void {
   const overviewSpotlightEl = getRequiredElement<HTMLElement>("overview-spotlight");
   const overviewPresetsEl = getRequiredElement<HTMLElement>("overview-presets");
   const navEl = getRequiredElement<HTMLElement>("section-nav");
+  const activeFiltersEl = getRequiredElement<HTMLElement>("active-filters");
   const sectionsEl = getRequiredElement<HTMLElement>("digest-sections");
   const errorEl = getRequiredElement<HTMLElement>("digest-error");
   const backToTopEl = getRequiredElement<HTMLButtonElement>("back-to-top");
@@ -649,6 +745,7 @@ export function initDigestPage(endpoint = "/api/digest"): void {
       bookmarkIds,
       seenEntries
     );
+    renderActiveFilters(activeFiltersEl, filterState, activePayload);
 
     const bookmarkButtons = Array.from(sectionsEl.querySelectorAll<HTMLButtonElement>(".entry-card__bookmark"));
     for (const button of bookmarkButtons) {
@@ -825,6 +922,56 @@ export function initDigestPage(endpoint = "/api/digest"): void {
 
   clearFiltersEl.addEventListener("click", () => {
     resetFilters();
+    syncControls();
+    persistFilters();
+    renderActivePayload();
+  });
+
+  activeFiltersEl.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const chip = target.closest<HTMLButtonElement>(".active-filters__chip");
+    const filterKey = chip?.dataset.filterKey;
+
+    if (!chip || !filterKey) {
+      return;
+    }
+
+    switch (filterKey) {
+      case "preset":
+        resetFilters();
+        break;
+      case "search":
+        filterState.search = "";
+        filterState.activePresetId = "";
+        break;
+      case "topic":
+        filterState.topic = "all";
+        filterState.activePresetId = "";
+        break;
+      case "contentType":
+        filterState.contentType = "all";
+        filterState.activePresetId = "";
+        break;
+      case "audience":
+        filterState.audience = "all";
+        filterState.activePresetId = "";
+        break;
+      case "bookmarksOnly":
+        filterState.bookmarksOnly = false;
+        filterState.activePresetId = "";
+        break;
+      case "newOnly":
+        filterState.newOnly = false;
+        filterState.activePresetId = "";
+        break;
+      default:
+        return;
+    }
+
     syncControls();
     persistFilters();
     renderActivePayload();
