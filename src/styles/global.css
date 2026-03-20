@@ -227,14 +227,16 @@ a {
 
 .theme-toggle__icon {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   z-index: 1;
-  font-family: "Avenir Next Condensed", "Franklin Gothic Medium", "Avenir Next", sans-serif;
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
   color: var(--text);
-  text-align: center;
+}
+
+.theme-toggle__icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .hero {
@@ -734,14 +736,6 @@ a {
   align-items: center;
 }
 
-.entry-card__source-row,
-.entry-card__transparency {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: start;
-}
-
 .entry-card__bookmark {
   border: 1px solid var(--line);
   background: var(--surface-strong);
@@ -781,27 +775,14 @@ a {
   color: var(--badge-news-text);
 }
 
-.entry-card__source,
 .entry-card__summary,
 .entry-card__meta {
   color: var(--muted);
 }
 
-.entry-card__source {
-  margin: 0;
-  font-size: 0.95rem;
-}
-
-.entry-card__score,
-.entry-card__why,
-.entry-card__evidence-note,
-.entry-card__transparency {
+.entry-card__why {
   margin: 0;
   color: var(--muted);
-}
-
-.entry-card__score {
-  font-size: 0.88rem;
 }
 
 .entry-card__title {
@@ -834,23 +815,22 @@ a {
 }
 
 .entry-card__taxonomy {
-  margin-bottom: 16px;
+  margin: 0 0 16px;
 }
 
 .entry-card__meta {
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
   font-size: 0.9rem;
 }
 
-.entry-card__evidence-note {
-  margin-top: 10px;
-  font-size: 0.88rem;
+.entry-card__meta--primary {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
-.entry-card__transparency {
-  padding-top: 12px;
-  font-size: 0.85rem;
+.entry-card__meta--secondary {
+  margin-top: 8px;
+  font-size: 0.84rem;
+  align-items: start;
 }
 
 .empty-state {
@@ -1012,8 +992,6 @@ a {
 
   .entry-card__topline,
   .entry-card__meta,
-  .entry-card__source-row,
-  .entry-card__transparency,
   .spotlight-card__meta,
   .overview-panel__metrics,
   .overview-panel__spotlight {

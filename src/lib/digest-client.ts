@@ -104,7 +104,18 @@ function renderEntryTags(values: string[], className: string): string {
 function renderEntries(entries: DigestEntry[]): string {
   return entries
     .map(
-      (entry) => `
+      (entry) => {
+        const taxonomyTags = [...entry.contentTypes, ...entry.audiences].slice(0, 4);
+        const evidenceSummary = [
+          entry.evidence.studyType,
+          entry.evidence.phase,
+          entry.evidence.sampleSize ? `n=${entry.evidence.sampleSize}` : ""
+        ]
+          .filter(Boolean)
+          .join(" • ");
+        const transparencySummary = entry.transparency.matchedBecause.slice(0, 2).join(" • ") || "Matched by source and text signals";
+
+        return `
         <article class="entry-card entry-card--${escapeAttribute(entry.type)}">
           <div class="entry-card__topline">
             <div class="entry-card__badges">
@@ -116,10 +127,6 @@ function renderEntries(entries: DigestEntry[]): string {
               Save
             </button>
           </div>
-          <div class="entry-card__source-row">
-            <p class="entry-card__source">${escapeHtml(entry.source)}</p>
-            <p class="entry-card__score">Score ${entry.score}</p>
-          </div>
 
           <h3 class="entry-card__title">
             <a href="${escapeAttribute(entry.link)}" target="_blank" rel="noreferrer">${escapeHtml(entry.title)}</a>
@@ -128,21 +135,21 @@ function renderEntries(entries: DigestEntry[]): string {
           <p class="entry-card__summary">${escapeHtml(entry.summary)}</p>
           <p class="entry-card__why">${escapeHtml(entry.whyItMatters.summary)}</p>
           <div class="entry-card__taxonomy">
-            ${renderEntryTags(entry.contentTypes, "entry-card__taxonomy-tag")}
-            ${renderEntryTags(entry.audiences, "entry-card__taxonomy-tag")}
+            ${renderEntryTags(taxonomyTags, "entry-card__taxonomy-tag")}
           </div>
 
-          <div class="entry-card__meta">
-            <span>${escapeHtml(entry.evidence.studyType)}${entry.evidence.phase ? ` • ${escapeHtml(entry.evidence.phase)}` : ""}</span>
+          <div class="entry-card__meta entry-card__meta--primary">
+            <span>${escapeHtml(entry.source)}</span>
             <time datetime="${entry.publishedIso ? escapeAttribute(entry.publishedIso) : ""}">${escapeHtml(formatEntryDate(entry))}</time>
+            <span>Score ${entry.score}</span>
           </div>
-          <p class="entry-card__evidence-note">${escapeHtml(entry.evidence.rationale)}</p>
-          <div class="entry-card__transparency">
-            <span>${escapeHtml(entry.transparency.matchedBecause.join(" • ") || "Matched by source and text signals")}</span>
-            <span>${escapeHtml(titleCase(entry.transparency.sourceType))} source • Ingested ${escapeHtml(formatRelativeDateLabel(entry.transparency.ingestedAt))}</span>
+          <div class="entry-card__meta entry-card__meta--secondary">
+            <span>${escapeHtml(evidenceSummary || entry.evidence.rationale)}</span>
+            <span>${escapeHtml(transparencySummary)}</span>
           </div>
         </article>
-      `
+      `;
+      }
     )
     .join("");
 }
