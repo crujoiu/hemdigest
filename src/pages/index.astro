@@ -47,6 +47,77 @@ const initialDigest = await getDigestData();
             <span class="hero__stat-label">Coverage</span>
             <strong id="digest-coverage">0 streams</strong>
           </div>
+          <div class="hero__stat">
+            <span class="hero__stat-label">Duplicates Removed</span>
+            <strong id="digest-deduped">0</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="overview-panel" id="overview-panel" aria-label="Digest overview">
+      <div class="overview-panel__summary">
+        <p class="digest-section__eyebrow">Overview</p>
+        <h2>Priority developments</h2>
+        <p id="overview-health">Reviewing source health and top activity.</p>
+        <div class="overview-panel__presets" id="overview-presets">
+          <span class="overview-preset">Loading presets</span>
+        </div>
+      </div>
+      <div class="overview-panel__content">
+        <div class="overview-panel__metrics" id="overview-metrics">
+          <article class="overview-card">
+            <p class="overview-card__label">Top developments</p>
+            <strong>Loading</strong>
+          </article>
+        </div>
+        <div class="overview-panel__spotlight" id="overview-spotlight">
+          <article class="spotlight-card">
+            <p class="spotlight-card__eyebrow">Loading</p>
+            <h3>Preparing briefing highlights</h3>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="control-bar" aria-label="Digest controls">
+      <div class="control-bar__search">
+        <div class="control-bar__field">
+          <label class="control-bar__label" for="digest-search">Search</label>
+          <input id="digest-search" class="control-bar__input" type="search" placeholder="Search titles, summaries, topics" />
+        </div>
+      </div>
+      <div class="control-bar__filters">
+        <div class="control-bar__field">
+          <label class="control-bar__label" for="topic-filter">Topic</label>
+          <select id="topic-filter" class="control-bar__select">
+            <option value="all">All topics</option>
+          </select>
+        </div>
+        <div class="control-bar__field">
+          <label class="control-bar__label" for="content-filter">Content</label>
+          <select id="content-filter" class="control-bar__select">
+            <option value="all">All content</option>
+          </select>
+        </div>
+        <div class="control-bar__field">
+          <label class="control-bar__label" for="audience-filter">Audience</label>
+          <select id="audience-filter" class="control-bar__select">
+            <option value="all">All audiences</option>
+          </select>
+        </div>
+      </div>
+      <div class="control-bar__actions">
+        <div class="control-bar__field">
+          <label class="control-bar__label" for="preset-filter">Preset</label>
+          <select id="preset-filter" class="control-bar__select">
+            <option value="">Choose preset</option>
+          </select>
+        </div>
+        <div class="control-bar__button-row">
+          <button id="bookmarks-toggle" class="control-bar__button" type="button" aria-pressed="false">Bookmarks only</button>
+          <button id="new-toggle" class="control-bar__button" type="button" aria-pressed="false">New since last visit</button>
+          <button id="clear-filters" class="control-bar__button control-bar__button--secondary" type="button">Clear filters</button>
         </div>
       </div>
     </section>
