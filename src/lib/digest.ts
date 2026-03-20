@@ -413,6 +413,59 @@ function detectPhase(text: string): string | null {
   return null;
 }
 
+function detectImpactSignal(text: string): string | null {
+  if (/\bimprov(ed|ement|es)?\b|\bbenefit\b|\bbetter\b|\bsuperior\b/i.test(text)) {
+    return "reports a potential benefit signal";
+  }
+
+  if (/\bsafe(ty)?\b|\btolerab/i.test(text)) {
+    return "includes a safety or tolerability signal";
+  }
+
+  if (/\boverall survival\b|\bprogression-free survival\b|\bresponse rate\b/i.test(text)) {
+    return "tracks clinically meaningful outcomes";
+  }
+
+  if (/\bassociation\b|\brisk\b|\bcorrelat/i.test(text)) {
+    return "may inform risk stratification or disease association";
+  }
+
+  return null;
+}
+
+function buildOutcomeSummary(
+  contentTypes: ContentTag[],
+  evidence: EvidenceSnapshot,
+  abstractText: string
+): string {
+  if (contentTypes.includes("guideline")) {
+    return "may influence practice decisions";
+  }
+
+  if (evidence.phase) {
+    return `${evidence.phase.toLowerCase()} evidence could affect treatment strategy`;
+  }
+
+  if (contentTypes.includes("trial")) {
+    return "adds interventional evidence relevant to treatment selection";
+  }
+
+  if (contentTypes.includes("review")) {
+    return "synthesizes evidence that may shift interpretation of the literature";
+  }
+
+  const impactSignal = detectImpactSignal(abstractText);
+  if (impactSignal) {
+    return impactSignal;
+  }
+
+  if (evidence.sampleSize && evidence.sampleSize >= 100) {
+    return "draws on a larger cohort than typical early signals";
+  }
+
+  return "adds signal to the current hematology evidence base";
+}
+
 function deriveEvidence(
   text: string,
   contentTypes: ContentTag[],
@@ -544,7 +597,10 @@ function buildWhyItMatters(
   topics: TopicTag[],
   contentTypes: ContentTag[],
   evidence: EvidenceSnapshot,
-  source: string
+  source: string,
+  hints?: {
+    abstractText?: string;
+  }
 ): DigestEntry["whyItMatters"] {
   const matchedSignals = [
     ...topics.filter((topic) => topic !== "general").map((topic) => `topic:${topic}`),
@@ -555,9 +611,18 @@ function buildWhyItMatters(
 
   const readableTopic = topics.find((topic) => topic !== "general") ?? "general hematology";
   const readableContent = contentTypes[0] ?? "research";
+  const abstractText = hints?.abstractText ?? "";
+  const outcomeSummary = buildOutcomeSummary(contentTypes, evidence, abstractText);
+  const cohortSummary = evidence.sampleSize ? ` in a cohort of about ${evidence.sampleSize}` : "";
+  const evidenceSummary =
+    evidence.level === "guideline"
+      ? "guideline-level direction"
+      : evidence.phase
+        ? `${evidence.phase.toLowerCase()} evidence`
+        : evidence.studyType.toLowerCase();
 
   return {
-    summary: `${title} was prioritized because it looks relevant to ${readableTopic} and appears to be a ${readableContent} update.`,
+    summary: `Relevant to ${readableTopic}, this ${readableContent} item contributes ${evidenceSummary}${cohortSummary} and ${outcomeSummary}.`,
     matchedSignals
   };
 }
@@ -572,6 +637,7 @@ function createEntry(
     sampleSizeHint?: number | null;
     rationaleHint?: string;
     levelHint?: EvidenceLevel;
+    abstractText?: string;
   }
 ): DigestEntry {
   const analysisText = `${entry.title} ${entry.summary} ${entry.source} ${hints?.classificationText ?? ""}`.trim();
@@ -601,7 +667,7 @@ function createEntry(
     score,
     dedupeKey,
     isPrimarySource,
-    whyItMatters: buildWhyItMatters(entry.title, topics, contentTypes, evidence, entry.source),
+    whyItMatters: buildWhyItMatters(entry.title, topics, contentTypes, evidence, entry.source, hints),
     transparency: {
       matchedBecause: [
         ...topics.filter((topic) => topic !== "general").map((topic) => `Topic match: ${topic.toUpperCase()}`),
@@ -841,6 +907,7 @@ async function fetchLancetPubMedFallback(source: HtmlSourceConfig, reason: strin
         }, {
           classificationText: `${publicationTypes.join(" ")} ${abstractText}`.trim(),
           ...publicationTypeHints,
+          abstractText,
           phaseHint,
           sampleSizeHint
         })
@@ -1129,6 +1196,7 @@ async function fetchPubMedEntries(query: string, daysBack = 7): Promise<FetchRes
         }, {
           classificationText: `${publicationTypes.join(" ")} ${abstractText}`.trim(),
           ...publicationTypeHints,
+          abstractText,
           phaseHint,
           sampleSizeHint
         })
