@@ -12,6 +12,16 @@ const ENTRY_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 const DATE_ONLY_FORMATTER = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium"
 });
+const DOMAIN_SEARCH_CONCEPTS: Array<{ topic: TopicTag; aliases: string[] }> = [
+  { topic: "aml", aliases: ["aml", "acute myeloid leukemia", "acute myelogenous leukemia"] },
+  { topic: "lymphoma", aliases: ["lymphoma", "hodgkin", "non-hodgkin", "nhl", "hodgkin lymphoma"] },
+  { topic: "myeloma", aliases: ["myeloma", "multiple myeloma", "mm"] },
+  { topic: "mpn", aliases: ["mpn", "myeloproliferative", "myelofibrosis", "polycythemia vera", "essential thrombocythemia"] },
+  { topic: "anemia", aliases: ["anemia", "anaemia", "sickle cell", "hemolytic anemia"] },
+  { topic: "thrombosis", aliases: ["thrombosis", "thromboembolism", "vte", "coagulation", "venous thromboembolism"] },
+  { topic: "transplant", aliases: ["transplant", "hsct", "bmt", "bone marrow transplant", "stem cell transplant"] },
+  { topic: "benign", aliases: ["benign hematology", "itp", "hemophilia", "thalassemia"] }
+];
 
 function getRequiredElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -46,6 +56,7 @@ function hasDigestPageElements(): boolean {
     "content-filter",
     "audience-filter",
     "preset-filter",
+    "search-assist",
     "bookmarks-toggle",
     "new-toggle",
     "clear-filters",
@@ -110,6 +121,35 @@ function renderOverflowTag(count: number, className: string): string {
   return `<span class="${className} ${className}--overflow">+${count}</span>`;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightSearchMatches(value: string, query: string): string {
+  const tokens = Array.from(new Set(getSearchTokens(query).filter((token) => token.length >= 2))).sort(
+    (left, right) => right.length - left.length
+  );
+
+  if (tokens.length === 0) {
+    return escapeHtml(value);
+  }
+
+  const pattern = new RegExp(`(${tokens.map(escapeRegExp).join("|")})`, "gi");
+  const parts = value.split(pattern);
+
+  return parts
+    .map((part) => {
+      if (!part) {
+        return "";
+      }
+
+      return tokens.some((token) => token.toLowerCase() === part.toLowerCase())
+        ? `<mark class="search-highlight">${escapeHtml(part)}</mark>`
+        : escapeHtml(part);
+    })
+    .join("");
+}
+
 function getSearchMatchHints(entry: DigestEntry, query: string): string[] {
   const normalizedQuery = normalizeSearchText(query);
 
@@ -117,7 +157,7 @@ function getSearchMatchHints(entry: DigestEntry, query: string): string[] {
     return [];
   }
 
-  const tokens = getSearchTokens(normalizedQuery);
+  const terms = getExpandedSearchTerms(normalizedQuery);
   const title = normalizeSearchText(entry.title);
   const summary = normalizeSearchText(entry.summary);
   const source = normalizeSearchText(entry.source);
@@ -126,27 +166,27 @@ function getSearchMatchHints(entry: DigestEntry, query: string): string[] {
   const audiences = entry.audiences.map((audience) => normalizeSearchText(audience));
   const hints = new Set<string>();
 
-  if (title.includes(normalizedQuery) || tokens.some((token) => title.includes(token))) {
+  if (title.includes(normalizedQuery) || terms.some((term) => title.includes(term))) {
     hints.add("title");
   }
 
-  if (topics.includes(normalizedQuery) || tokens.some((token) => topics.includes(token))) {
+  if (topics.includes(normalizedQuery) || terms.some((term) => topics.includes(term))) {
     hints.add("topic");
   }
 
   if (
     contentTypes.includes(normalizedQuery) ||
     audiences.includes(normalizedQuery) ||
-    tokens.some((token) => contentTypes.includes(token) || audiences.includes(token))
+    terms.some((term) => contentTypes.includes(term) || audiences.includes(term))
   ) {
     hints.add("tags");
   }
 
-  if (summary.includes(normalizedQuery) || tokens.some((token) => summary.includes(token))) {
+  if (summary.includes(normalizedQuery) || terms.some((term) => summary.includes(term))) {
     hints.add("summary");
   }
 
-  if (source.includes(normalizedQuery) || tokens.some((token) => source.includes(token))) {
+  if (source.includes(normalizedQuery) || terms.some((term) => source.includes(term))) {
     hints.add("source");
   }
 
@@ -195,10 +235,10 @@ function renderEntries(entries: DigestEntry[], searchQuery = ""): string {
           </div>
 
           <h3 class="entry-card__title">
-            <a href="${escapeAttribute(entry.link)}" target="_blank" rel="noreferrer">${escapeHtml(entry.title)}</a>
+            <a href="${escapeAttribute(entry.link)}" target="_blank" rel="noreferrer">${highlightSearchMatches(entry.title, searchQuery)}</a>
           </h3>
 
-          <p class="entry-card__summary">${escapeHtml(entry.summary)}</p>
+          <p class="entry-card__summary">${highlightSearchMatches(entry.summary, searchQuery)}</p>
           ${searchHintMarkup}
           <div class="entry-card__why-block">
             <p class="entry-card__why-label">Why it matters</p>
@@ -303,6 +343,113 @@ function getSearchTokens(value: string): string[] {
     .filter(Boolean);
 }
 
+function getExpandedSearchTerms(query: string): string[] {
+  const normalizedQuery = normalizeSearchText(query);
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const terms = new Set<string>([normalizedQuery, ...getSearchTokens(normalizedQuery)]);
+
+  for (const concept of DOMAIN_SEARCH_CONCEPTS) {
+    const matched = concept.aliases.some((alias) => normalizedQuery.includes(alias) || terms.has(alias));
+
+    if (!matched) {
+      continue;
+    }
+
+    terms.add(concept.topic);
+    for (const alias of concept.aliases) {
+      terms.add(alias);
+      for (const token of getSearchTokens(alias)) {
+        terms.add(token);
+      }
+    }
+  }
+
+  return Array.from(terms).filter(Boolean);
+}
+
+function findMatchingSearchConcepts(query: string): Array<{ topic: TopicTag; aliases: string[] }> {
+  const normalizedQuery = normalizeSearchText(query);
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const terms = getExpandedSearchTerms(normalizedQuery);
+
+  return DOMAIN_SEARCH_CONCEPTS.filter(
+    (concept) =>
+      terms.includes(concept.topic) ||
+      concept.aliases.some(
+        (alias) =>
+          normalizedQuery.includes(alias) ||
+          alias.includes(normalizedQuery) ||
+          terms.includes(alias)
+      )
+  );
+}
+
+function getTopicDisplayLabel(topic: TopicTag): string {
+  return topic === "aml" || topic === "mpn" ? topic.toUpperCase() : titleCase(topic);
+}
+
+function renderSearchAssist(target: HTMLElement, filterState: FilterState): void {
+  const matchingConcepts = findMatchingSearchConcepts(filterState.search).slice(0, 2);
+
+  if (matchingConcepts.length === 0 && !filterState.search) {
+    const quickStarts = [
+      { label: "AML", query: "AML" },
+      { label: "Multiple myeloma", query: "multiple myeloma" },
+      { label: "HSCT", query: "HSCT" },
+      { label: "VTE", query: "VTE" }
+    ];
+
+    target.innerHTML = `
+      <p class="search-assist__label">Try a quick search</p>
+      <div class="search-assist__actions">
+        ${quickStarts
+          .map(
+            (item) => `
+              <button class="search-assist__chip" type="button" data-search-query="${escapeAttribute(item.query)}">
+                ${escapeHtml(item.label)}
+              </button>
+            `
+          )
+          .join("")}
+      </div>
+    `;
+    return;
+  }
+
+  if (matchingConcepts.length === 0) {
+    target.innerHTML = "";
+    return;
+  }
+
+  target.innerHTML = matchingConcepts
+    .map((concept) => {
+      const leadAlias = concept.aliases.find((alias) => alias.length > concept.topic.length) ?? concept.aliases[0];
+
+      return `
+        <div class="search-assist__group">
+          <p class="search-assist__label">Recognized ${escapeHtml(filterState.search)} as ${escapeHtml(getTopicDisplayLabel(concept.topic))}</p>
+          <div class="search-assist__actions">
+            <button class="search-assist__chip" type="button" data-topic-value="${escapeAttribute(concept.topic)}">
+              Filter to ${escapeHtml(getTopicDisplayLabel(concept.topic))}
+            </button>
+            <button class="search-assist__chip search-assist__chip--secondary" type="button" data-search-query="${escapeAttribute(leadAlias)}">
+              Search ${escapeHtml(leadAlias)}
+            </button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function getSearchScore(entry: DigestEntry, query: string): number {
   const normalizedQuery = normalizeSearchText(query);
 
@@ -310,7 +457,7 @@ function getSearchScore(entry: DigestEntry, query: string): number {
     return 0;
   }
 
-  const tokens = getSearchTokens(normalizedQuery);
+  const terms = getExpandedSearchTerms(normalizedQuery);
   const title = normalizeSearchText(entry.title);
   const summary = normalizeSearchText(entry.summary);
   const source = normalizeSearchText(entry.source);
@@ -339,24 +486,28 @@ function getSearchScore(entry: DigestEntry, query: string): number {
     score += 3;
   }
 
-  for (const token of tokens) {
-    if (title.includes(token)) {
-      score += 4;
+  for (const term of terms) {
+    if (term === normalizedQuery) {
+      continue;
     }
 
-    if (topics.includes(token)) {
+    if (title.includes(term)) {
+      score += term.includes(" ") ? 6 : 4;
+    }
+
+    if (topics.includes(term)) {
       score += 5;
     }
 
-    if (contentTypes.includes(token) || audiences.includes(token)) {
+    if (contentTypes.includes(term) || audiences.includes(term)) {
       score += 3;
     }
 
-    if (summary.includes(token)) {
-      score += 1.5;
+    if (summary.includes(term)) {
+      score += term.includes(" ") ? 2.5 : 1.5;
     }
 
-    if (source.includes(token)) {
+    if (source.includes(term)) {
       score += 1;
     }
   }
@@ -402,23 +553,68 @@ function markSeenEntries(sections: DigestSection[]): void {
 
 function renderOverview(
   payload: DigestPayload,
+  filteredSections: DigestSection[],
+  filterState: FilterState,
   healthEl: HTMLElement,
   metricsEl: HTMLElement,
   spotlightEl: HTMLElement,
   presetsEl: HTMLElement,
   activePresetId: string
 ): void {
+  const filteredEntries = filteredSections.flatMap((section) => section.entries);
+  const activeTopics = Array.from(
+    new Set(
+      filteredEntries
+        .flatMap((entry) => entry.topics)
+        .filter((topic) => topic !== "general")
+    )
+  );
+  const filteredTopicActivity = activeTopics
+    .map((topic) => ({
+      topic,
+      label: titleCase(topic),
+      count: filteredEntries.filter((entry) => entry.topics.includes(topic)).length
+    }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+  const spotlightEntries = filteredEntries
+    .slice()
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3);
   const healthy = payload.overview.sourceHealth.healthySources;
   const total = payload.overview.sourceHealth.totalSources;
-  const topicActivity = payload.overview.topicActivity.slice(0, 3).map((item) => `${item.label} ${item.count}`).join(" • ");
+  const hasActiveFilters =
+    Boolean(normalizeSearchText(filterState.search)) ||
+    filterState.topic !== "all" ||
+    filterState.contentType !== "all" ||
+    filterState.audience !== "all" ||
+    filterState.bookmarksOnly ||
+    filterState.newOnly ||
+    Boolean(filterState.activePresetId);
+  const topicActivity = filteredTopicActivity.slice(0, 3).map((item) => `${item.label} ${item.count}`).join(" • ");
 
-  healthEl.textContent = `${healthy}/${total} source pipelines healthy. ${topicActivity || "Topic activity will appear as feeds populate."}`;
+  healthEl.textContent = hasActiveFilters
+    ? `${filteredEntries.length} filtered results across ${filteredSections.length} streams. ${topicActivity || "Refine filters to focus the briefing further."}`
+    : `${healthy}/${total} source pipelines healthy. ${topicActivity || "Topic activity will appear as feeds populate."}`;
   metricsEl.innerHTML = [
-    `<article class="overview-card"><p class="overview-card__label">Top developments</p><strong>${payload.overview.topDevelopments.length}</strong></article>`,
-    `<article class="overview-card"><p class="overview-card__label">Duplicates removed</p><strong>${payload.dedupedEntries}</strong></article>`,
-    `<article class="overview-card"><p class="overview-card__label">Active topics</p><strong>${payload.overview.topicActivity.length}</strong></article>`
+    `<article class="overview-card"><p class="overview-card__label">${hasActiveFilters ? "Visible results" : "Top developments"}</p><strong>${hasActiveFilters ? filteredEntries.length : payload.overview.topDevelopments.length}</strong></article>`,
+    `<article class="overview-card"><p class="overview-card__label">${hasActiveFilters ? "Visible streams" : "Duplicates removed"}</p><strong>${hasActiveFilters ? filteredSections.length : payload.dedupedEntries}</strong></article>`,
+    `<article class="overview-card"><p class="overview-card__label">Active topics</p><strong>${filteredTopicActivity.length}</strong></article>`
   ].join("");
-  spotlightEl.innerHTML = payload.overview.topDevelopments
+  spotlightEl.innerHTML = (hasActiveFilters
+    ? spotlightEntries.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        summary: entry.whyItMatters.summary,
+        source: entry.source,
+        link: entry.link,
+        topic: entry.topics.find((topic) => topic !== "general") ?? "general",
+        type: entry.type,
+        score: entry.score,
+        published: entry.publishedIso ?? entry.published,
+        evidenceLevel: entry.evidence.level
+      }))
+    : payload.overview.topDevelopments
+  )
     .map(
       (item) => `
         <article class="spotlight-card spotlight-card--${escapeAttribute(item.type)}">
@@ -443,6 +639,15 @@ function renderOverview(
       `
     )
     .join("");
+  if (!spotlightEl.innerHTML) {
+    spotlightEl.innerHTML = `
+      <article class="spotlight-card">
+        <p class="spotlight-card__eyebrow">No spotlight</p>
+        <h3>No entries match the current filters</h3>
+        <p>Clear one or more filters to restore the full briefing overview.</p>
+      </article>
+    `;
+  }
   presetsEl.innerHTML = payload.overview.savedPresetSuggestions
     .map(
       (preset) => `
@@ -557,6 +762,85 @@ function renderActiveFilters(target: HTMLElement, filterState: FilterState, dige
   target.innerHTML = chips.join("");
 }
 
+function getEmptyStateActions(filterState: FilterState): Array<{ key: string; label: string }> {
+  const actions: Array<{ key: string; label: string }> = [];
+
+  if (filterState.search) {
+    actions.push({ key: "search", label: "Clear search" });
+  }
+
+  if (filterState.activePresetId) {
+    actions.push({ key: "preset", label: "Remove preset" });
+  } else {
+    if (filterState.topic !== "all") {
+      actions.push({ key: "topic", label: "Show all topics" });
+    }
+
+    if (filterState.contentType !== "all") {
+      actions.push({ key: "contentType", label: "Show all content" });
+    }
+
+    if (filterState.audience !== "all") {
+      actions.push({ key: "audience", label: "Show all audiences" });
+    }
+  }
+
+  if (filterState.bookmarksOnly) {
+    actions.push({ key: "bookmarksOnly", label: "Show all entries" });
+  }
+
+  if (filterState.newOnly) {
+    actions.push({ key: "newOnly", label: "Include seen entries" });
+  }
+
+  if (actions.length > 1) {
+    actions.push({ key: "resetAll", label: "Clear all filters" });
+  }
+
+  return actions.slice(0, 4);
+}
+
+function clearFilter(filterState: FilterState, filterKey: string): boolean {
+  switch (filterKey) {
+    case "preset":
+    case "resetAll":
+      filterState.search = "";
+      filterState.topic = "all";
+      filterState.contentType = "all";
+      filterState.audience = "all";
+      filterState.bookmarksOnly = false;
+      filterState.newOnly = false;
+      filterState.activePresetId = "";
+      return true;
+    case "search":
+      filterState.search = "";
+      filterState.activePresetId = "";
+      return true;
+    case "topic":
+      filterState.topic = "all";
+      filterState.activePresetId = "";
+      return true;
+    case "contentType":
+      filterState.contentType = "all";
+      filterState.activePresetId = "";
+      return true;
+    case "audience":
+      filterState.audience = "all";
+      filterState.activePresetId = "";
+      return true;
+    case "bookmarksOnly":
+      filterState.bookmarksOnly = false;
+      filterState.activePresetId = "";
+      return true;
+    case "newOnly":
+      filterState.newOnly = false;
+      filterState.activePresetId = "";
+      return true;
+    default:
+      return false;
+  }
+}
+
 function renderSection(section: DigestSection, pageIndex: number, searchQuery: string): string {
   const pageCount = Math.max(1, Math.ceil(section.entries.length / SECTION_PAGE_SIZE));
   const safePageIndex = Math.min(Math.max(pageIndex, 0), pageCount - 1);
@@ -606,12 +890,53 @@ function renderSection(section: DigestSection, pageIndex: number, searchQuery: s
   `;
 }
 
-function renderSections(target: HTMLElement, sections: DigestSection[], pageIndexes: Map<string, number>, searchQuery: string): void {
+function renderSections(
+  target: HTMLElement,
+  sections: DigestSection[],
+  pageIndexes: Map<string, number>,
+  searchQuery: string,
+  filterState: FilterState
+): void {
   if (sections.length === 0) {
+    const activeLabels: string[] = [];
+    if (filterState.activePresetId) {
+      activeLabels.push("preset");
+    } else {
+      if (filterState.topic !== "all") {
+        activeLabels.push(`topic ${titleCase(filterState.topic)}`);
+      }
+      if (filterState.contentType !== "all") {
+        activeLabels.push(`content ${titleCase(filterState.contentType)}`);
+      }
+      if (filterState.audience !== "all") {
+        activeLabels.push(`audience ${titleCase(filterState.audience)}`);
+      }
+    }
+    if (filterState.search) {
+      activeLabels.push(`search "${filterState.search}"`);
+    }
+    if (filterState.bookmarksOnly) {
+      activeLabels.push("bookmarks only");
+    }
+    if (filterState.newOnly) {
+      activeLabels.push("new only");
+    }
+
+    const actionsMarkup = getEmptyStateActions(filterState)
+      .map(
+        (action) => `
+          <button class="empty-state__action" type="button" data-filter-key="${escapeAttribute(action.key)}">
+            ${escapeHtml(action.label)}
+          </button>
+        `
+      )
+      .join("");
+
     target.innerHTML = `
-      <div class="empty-state">
+      <div class="empty-state empty-state--interactive">
         <p>No entries match the current filters.</p>
-        <p>Try widening topic, content, audience, or bookmark filters.</p>
+        <p>${escapeHtml(activeLabels.length > 0 ? `Current constraints: ${activeLabels.join(" • ")}.` : "Try widening topic, content, audience, or bookmark filters.")}</p>
+        <div class="empty-state__actions">${actionsMarkup}</div>
       </div>
     `;
     return;
@@ -716,10 +1041,9 @@ function filterSections(
   seenEntries: Set<string>
 ): DigestSection[] {
   const hasSearch = Boolean(normalizeSearchText(filterState.search));
-
-  return sections
+  const filteredSections = sections
     .map((section) => {
-      const filteredEntries = section.entries
+      const scoredEntries = section.entries
         .filter((entry) => matchesFilter(entry, filterState, bookmarks, seenEntries))
         .map((entry) => ({
           entry,
@@ -742,16 +1066,43 @@ function filterSections(
           }
 
           return left.entry.title.localeCompare(right.entry.title);
-        })
-        .map(({ entry }) => entry);
+        });
+
+      const filteredEntries = scoredEntries.map(({ entry }) => entry);
+      const bestSearchScore = scoredEntries[0]?.searchScore ?? 0;
+      const bestEntryScore = scoredEntries[0]?.entry.score ?? 0;
 
       return {
         ...section,
         count: filteredEntries.length,
-        entries: filteredEntries
+        entries: filteredEntries,
+        bestSearchScore,
+        bestEntryScore
       };
     })
     .filter((section) => section.entries.length > 0);
+
+  if (!hasSearch) {
+    return filteredSections.map(({ bestSearchScore: _bestSearchScore, bestEntryScore: _bestEntryScore, ...section }) => section);
+  }
+
+  return filteredSections
+    .sort((left, right) => {
+      if (right.bestSearchScore !== left.bestSearchScore) {
+        return right.bestSearchScore - left.bestSearchScore;
+      }
+
+      if (right.bestEntryScore !== left.bestEntryScore) {
+        return right.bestEntryScore - left.bestEntryScore;
+      }
+
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return left.label.localeCompare(right.label);
+    })
+    .map(({ bestSearchScore: _bestSearchScore, bestEntryScore: _bestEntryScore, ...section }) => section);
 }
 
 function applyDigestPayload(
@@ -782,7 +1133,16 @@ function applyDigestPayload(
   totalEl.textContent = String(digest.totalEntries);
   coverageEl.textContent = `${digestSections.length} streams`;
   dedupedEl.textContent = String(digest.dedupedEntries);
-  renderOverview(digest, overviewHealthEl, overviewMetricsEl, overviewSpotlightEl, overviewPresetsEl, filterState.activePresetId);
+  renderOverview(
+    digest,
+    digestSections,
+    filterState,
+    overviewHealthEl,
+    overviewMetricsEl,
+    overviewSpotlightEl,
+    overviewPresetsEl,
+    filterState.activePresetId
+  );
   renderNav(navEl, digestSections);
 
   pageIndexes.clear();
@@ -790,7 +1150,7 @@ function applyDigestPayload(
     pageIndexes.set(section.id, 0);
   }
 
-  renderSections(sectionsEl, digestSections, pageIndexes, filterState.search);
+  renderSections(sectionsEl, digestSections, pageIndexes, filterState.search, filterState);
 
   const isLocal =
     window.location.hostname === "localhost" ||
@@ -852,6 +1212,7 @@ export function initDigestPage(endpoint = "/api/digest"): void {
   const loadingOverlayEl = getRequiredElement<HTMLElement>("loading-overlay");
   const themeToggleEl = getRequiredElement<HTMLButtonElement>("theme-toggle");
   const searchEl = getRequiredElement<HTMLInputElement>("digest-search");
+  const searchAssistEl = getRequiredElement<HTMLElement>("search-assist");
   const topicFilterEl = getRequiredElement<HTMLSelectElement>("topic-filter");
   const contentFilterEl = getRequiredElement<HTMLSelectElement>("content-filter");
   const audienceFilterEl = getRequiredElement<HTMLSelectElement>("audience-filter");
@@ -916,6 +1277,7 @@ export function initDigestPage(endpoint = "/api/digest"): void {
     const audiences = Array.from(new Set(allEntries.flatMap((entry) => entry.audiences)));
 
     searchEl.value = filterState.search;
+    renderSearchAssist(searchAssistEl, filterState);
     populateSelect(topicFilterEl, topics, "All topics", filterState.topic);
     populateSelect(contentFilterEl, contentTypes, "All content", filterState.contentType);
     populateSelect(audienceFilterEl, audiences, "All audiences", filterState.audience);
@@ -1024,6 +1386,32 @@ export function initDigestPage(endpoint = "/api/digest"): void {
     renderActivePayload();
   });
 
+  searchAssistEl.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const button = target.closest<HTMLButtonElement>(".search-assist__chip");
+    if (!button) {
+      return;
+    }
+
+    if (button.dataset.searchQuery) {
+      filterState.search = button.dataset.searchQuery;
+      filterState.activePresetId = "";
+    }
+
+    if (button.dataset.topicValue) {
+      filterState.topic = button.dataset.topicValue as TopicTag | "all";
+      filterState.activePresetId = "";
+    }
+
+    syncControls();
+    persistFilters();
+    renderActivePayload();
+  });
+
   topicFilterEl.addEventListener("change", () => {
     filterState.topic = topicFilterEl.value as TopicTag | "all";
     filterState.activePresetId = "";
@@ -1089,36 +1477,8 @@ export function initDigestPage(endpoint = "/api/digest"): void {
       return;
     }
 
-    switch (filterKey) {
-      case "preset":
-        resetFilters();
-        break;
-      case "search":
-        filterState.search = "";
-        filterState.activePresetId = "";
-        break;
-      case "topic":
-        filterState.topic = "all";
-        filterState.activePresetId = "";
-        break;
-      case "contentType":
-        filterState.contentType = "all";
-        filterState.activePresetId = "";
-        break;
-      case "audience":
-        filterState.audience = "all";
-        filterState.activePresetId = "";
-        break;
-      case "bookmarksOnly":
-        filterState.bookmarksOnly = false;
-        filterState.activePresetId = "";
-        break;
-      case "newOnly":
-        filterState.newOnly = false;
-        filterState.activePresetId = "";
-        break;
-      default:
-        return;
+    if (!clearFilter(filterState, filterKey)) {
+      return;
     }
 
     syncControls();
@@ -1130,6 +1490,18 @@ export function initDigestPage(endpoint = "/api/digest"): void {
     const target = event.target;
 
     if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const emptyStateButton = target.closest<HTMLButtonElement>(".empty-state__action");
+    if (emptyStateButton?.dataset.filterKey) {
+      if (!clearFilter(filterState, emptyStateButton.dataset.filterKey)) {
+        return;
+      }
+
+      syncControls();
+      persistFilters();
+      renderActivePayload();
       return;
     }
 
