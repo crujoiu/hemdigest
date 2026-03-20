@@ -38,6 +38,11 @@ interface PubMedDocSummary {
   authors?: Array<{ name?: string }>;
 }
 
+interface PubMedArticleDetail {
+  abstractText: string;
+  publicationTypes: string[];
+}
+
 const RSS_FEEDS: FeedConfig[] = [
   { url: "https://onlinelibrary.wiley.com/feed/13652141/most-recent", type: "journal", label: "British Journal of Haematology" },
   { url: "https://www.nature.com/leu.rss", type: "journal", label: "Leukemia" },
@@ -221,6 +226,23 @@ function firstTextValue(...values: unknown[]): string {
   return "";
 }
 
+function collectText(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectText(item));
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.values(record).flatMap((item) => collectText(item));
+  }
+
+  return [];
+}
+
 function linkValue(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -373,6 +395,22 @@ function detectSampleSize(text: string): number | null {
   const raw = match[2] ?? match[1];
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function detectPhase(text: string): string | null {
+  if (/phase\s*3\b/i.test(text)) {
+    return "Phase 3";
+  }
+
+  if (/phase\s*2\b/i.test(text)) {
+    return "Phase 2";
+  }
+
+  if (/phase\s*1\b/i.test(text)) {
+    return "Phase 1";
+  }
+
+  return null;
 }
 
 function deriveEvidence(
@@ -575,6 +613,47 @@ function createEntry(
   };
 }
 
+async function fetchPubMedArticleDetails(ids: string[]): Promise<Record<string, PubMedArticleDetail>> {
+  if (ids.length === 0) {
+    return {};
+  }
+
+  const fetchUrl = new URL("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi");
+  fetchUrl.searchParams.set("db", "pubmed");
+  fetchUrl.searchParams.set("id", ids.join(","));
+  fetchUrl.searchParams.set("retmode", "xml");
+  fetchUrl.searchParams.set("tool", PUBMED_TOOL);
+  if (PUBMED_EMAIL) {
+    fetchUrl.searchParams.set("email", PUBMED_EMAIL);
+  }
+
+  const xml = await fetchText(fetchUrl.toString());
+  const parsed = parser.parse(xml) as Record<string, any>;
+  const articles = ensureArray(parsed?.PubmedArticleSet?.PubmedArticle);
+  const details: Record<string, PubMedArticleDetail> = {};
+
+  for (const article of articles) {
+    const pmid = textValue(article?.MedlineCitation?.PMID);
+    if (!pmid) {
+      continue;
+    }
+
+    const abstractParts = collectText(article?.MedlineCitation?.Article?.Abstract?.AbstractText)
+      .map((part) => cleanText(part, 800))
+      .filter((part) => part !== "No summary available.");
+    const publicationTypes = ensureArray(article?.MedlineCitation?.Article?.PublicationTypeList?.PublicationType)
+      .map((item) => textValue(item))
+      .filter((value) => value.length > 0);
+
+    details[pmid] = {
+      abstractText: abstractParts.join(" "),
+      publicationTypes
+    };
+  }
+
+  return details;
+}
+
 async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, {
     headers: {
@@ -729,6 +808,7 @@ async function fetchLancetPubMedFallback(source: HtmlSourceConfig, reason: strin
     const summaryData = (await fetchJsonWithRetry(summaryUrl)) as {
       result?: Record<string, PubMedDocSummary>;
     };
+    const articleDetails = await fetchPubMedArticleDetails(ids);
 
     const entries = ids.flatMap((pmid) => {
       const article = summaryData.result?.[pmid];
@@ -740,21 +820,29 @@ async function fetchLancetPubMedFallback(source: HtmlSourceConfig, reason: strin
         .map((author) => author?.name?.trim())
         .filter((name): name is string => Boolean(name))
         .slice(0, 3);
-      const publicationTypes = ensureArray(article.pubtype).filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+      const detail = articleDetails[pmid];
+      const publicationTypes = (detail?.publicationTypes.length ? detail.publicationTypes : ensureArray(article.pubtype)).filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0
+      );
       const publicationTypeHints = mapPubMedPublicationTypes(publicationTypes);
+      const abstractText = detail?.abstractText ?? "";
+      const phaseHint = detectPhase(`${article.title ?? ""} ${abstractText}`);
+      const sampleSizeHint = detectSampleSize(abstractText);
 
       return [
         createEntry({
           title: cleanText(article.title, 220),
           link: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
-          summary: cleanText(`${article.fulljournalname ?? article.source ?? source.label} | ${authorNames.join(", ") || "Authors unavailable"}`, 220),
+          summary: cleanText(abstractText || `${article.fulljournalname ?? article.source ?? source.label} | ${authorNames.join(", ") || "Authors unavailable"}`, 320),
           published: article.epubdate ?? article.pubdate ?? "No date",
           publishedIso: article.sortpubdate ? parseDate(article.sortpubdate)?.toISOString() ?? null : null,
           source: source.label,
           type: source.type
         }, {
-          classificationText: publicationTypes.join(" "),
-          ...publicationTypeHints
+          classificationText: `${publicationTypes.join(" ")} ${abstractText}`.trim(),
+          ...publicationTypeHints,
+          phaseHint,
+          sampleSizeHint
         })
       ];
     });
@@ -1008,6 +1096,7 @@ async function fetchPubMedEntries(query: string, daysBack = 7): Promise<FetchRes
     const summaryData = (await fetchJsonWithRetry(summaryUrl)) as {
       result?: Record<string, PubMedDocSummary>;
     };
+    const articleDetails = await fetchPubMedArticleDetails(ids);
 
     const entries = ids.flatMap((pmid) => {
       const article = summaryData.result?.[pmid];
@@ -1019,21 +1108,29 @@ async function fetchPubMedEntries(query: string, daysBack = 7): Promise<FetchRes
         .map((author) => author?.name?.trim())
         .filter((name): name is string => Boolean(name))
         .slice(0, 3);
-      const publicationTypes = ensureArray(article.pubtype).filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+      const detail = articleDetails[pmid];
+      const publicationTypes = (detail?.publicationTypes.length ? detail.publicationTypes : ensureArray(article.pubtype)).filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0
+      );
       const publicationTypeHints = mapPubMedPublicationTypes(publicationTypes);
+      const abstractText = detail?.abstractText ?? "";
+      const phaseHint = detectPhase(`${article.title ?? ""} ${abstractText}`);
+      const sampleSizeHint = detectSampleSize(abstractText);
 
       return [
         createEntry({
           title: cleanText(article.title, 220),
           link: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
-          summary: cleanText(`${article.fulljournalname ?? article.source ?? "PubMed"} | ${authorNames.join(", ") || "Authors unavailable"}`, 220),
+          summary: cleanText(abstractText || `${article.fulljournalname ?? article.source ?? "PubMed"} | ${authorNames.join(", ") || "Authors unavailable"}`, 320),
           published: article.epubdate ?? article.pubdate ?? "No date",
           publishedIso: article.sortpubdate ? parseDate(article.sortpubdate)?.toISOString() ?? null : null,
           source: "PubMed",
           type: "pubmed"
         }, {
-          classificationText: publicationTypes.join(" "),
-          ...publicationTypeHints
+          classificationText: `${publicationTypes.join(" ")} ${abstractText}`.trim(),
+          ...publicationTypeHints,
+          phaseHint,
+          sampleSizeHint
         })
       ];
     });
