@@ -1,6 +1,6 @@
 import type { DigestDiagnostic, DigestEntry, DigestPayload, DigestSection } from "./digest-types";
 
-const SECTION_PAGE_SIZE = 24;
+const SECTION_PAGE_SIZE = 12;
 const THEME_STORAGE_KEY = "theme";
 const ENTRY_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -111,9 +111,11 @@ function formatGeneratedAt(generatedAt: string, fallback: string): string {
   return ENTRY_DATE_FORMATTER.format(new Date(parsed));
 }
 
-function renderSection(section: DigestSection, visibleCount: number): string {
-  const visibleEntries = section.entries.slice(0, visibleCount);
-  const hasMore = section.entries.length > visibleCount;
+function renderSection(section: DigestSection, pageIndex: number): string {
+  const pageCount = Math.max(1, Math.ceil(section.entries.length / SECTION_PAGE_SIZE));
+  const safePageIndex = Math.min(Math.max(pageIndex, 0), pageCount - 1);
+  const start = safePageIndex * SECTION_PAGE_SIZE;
+  const visibleEntries = section.entries.slice(start, start + SECTION_PAGE_SIZE);
   const sectionBody =
     visibleEntries.length > 0
       ? `<div class="digest-section__grid">${renderEntries(visibleEntries)}</div>`
@@ -124,15 +126,20 @@ function renderSection(section: DigestSection, visibleCount: number): string {
         </div>
       `;
 
-  const controls = hasMore
-    ? `
-      <div class="digest-section__actions">
-        <button class="load-more-button" type="button" data-section-id="${escapeAttribute(section.id)}">
-          Show more (${section.entries.length - visibleCount} remaining)
-        </button>
-      </div>
-    `
-    : "";
+  const controls =
+    pageCount > 1
+      ? `
+        <div class="digest-section__actions">
+          <button class="pager-button" type="button" data-section-id="${escapeAttribute(section.id)}" data-direction="prev" ${safePageIndex === 0 ? "disabled" : ""}>
+            Newer
+          </button>
+          <span class="pager-status">Page ${safePageIndex + 1} of ${pageCount}</span>
+          <button class="pager-button" type="button" data-section-id="${escapeAttribute(section.id)}" data-direction="next" ${safePageIndex >= pageCount - 1 ? "disabled" : ""}>
+            Older
+          </button>
+        </div>
+      `
+      : "";
 
   return `
     <section id="${escapeAttribute(section.id)}" class="digest-section">
@@ -152,9 +159,9 @@ function renderSection(section: DigestSection, visibleCount: number): string {
   `;
 }
 
-function renderSections(target: HTMLElement, sections: DigestSection[], visibleCounts: Map<string, number>): void {
+function renderSections(target: HTMLElement, sections: DigestSection[], pageIndexes: Map<string, number>): void {
   target.innerHTML = sections
-    .map((section) => renderSection(section, visibleCounts.get(section.id) ?? SECTION_PAGE_SIZE))
+    .map((section) => renderSection(section, pageIndexes.get(section.id) ?? 0))
     .join("");
 }
 
@@ -230,6 +237,86 @@ function hideLoadingOverlay(overlay: HTMLElement): void {
   overlay.setAttribute("aria-hidden", "true");
 }
 
+function getInitialDigestPayload(): DigestPayload | null {
+  const element = document.getElementById("digest-initial-data");
+
+  if (!(element instanceof HTMLScriptElement) || !element.textContent) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(element.textContent) as DigestPayload;
+  } catch (error) {
+    console.error("Failed to parse embedded digest payload", error);
+    return null;
+  }
+}
+
+function applyDigestPayload(
+  digest: DigestPayload,
+  titleEl: HTMLElement,
+  taglineEl: HTMLElement,
+  updatedEl: HTMLElement,
+  totalEl: HTMLElement,
+  coverageEl: HTMLElement,
+  navEl: HTMLElement,
+  sectionsEl: HTMLElement,
+  errorEl: HTMLElement,
+  pageIndexes: Map<string, number>
+): DigestSection[] {
+  const digestSections = digest.sections;
+
+  titleEl.textContent = digest.site.title;
+  taglineEl.textContent = digest.site.tagline;
+  updatedEl.textContent = formatGeneratedAt(digest.generatedAt, digest.generatedAtDisplay);
+  totalEl.textContent = String(digest.totalEntries);
+  coverageEl.textContent = `${digestSections.length} streams`;
+  renderNav(navEl, digestSections);
+
+  pageIndexes.clear();
+  for (const section of digestSections) {
+    pageIndexes.set(section.id, 0);
+  }
+
+  renderSections(sectionsEl, digestSections, pageIndexes);
+
+  const isLocal =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1" ||
+    window.location.hostname.endsWith(".local");
+
+  errorEl.classList.add("is-hidden");
+  errorEl.textContent = "";
+
+  if (isLocal) {
+    showDiagnostics(errorEl, digest.diagnostics);
+  }
+
+  return digestSections;
+}
+
+async function fetchDigestPayload(endpoint: string): Promise<DigestPayload> {
+  const candidates = [endpoint];
+
+  if (endpoint === "/api/digest") {
+    candidates.push("/.netlify/functions/digest");
+  }
+
+  let lastError: Error | null = null;
+
+  for (const candidate of candidates) {
+    const response = await fetch(candidate);
+
+    if (response.ok) {
+      return (await response.json()) as DigestPayload;
+    }
+
+    lastError = new Error(`Request failed with status ${response.status} for ${candidate}`);
+  }
+
+  throw lastError ?? new Error("Failed to load digest payload.");
+}
+
 export function initDigestPage(endpoint = "/api/digest"): void {
   if (!hasDigestPageElements()) {
     return;
@@ -246,11 +333,28 @@ export function initDigestPage(endpoint = "/api/digest"): void {
   const backToTopEl = getRequiredElement<HTMLButtonElement>("back-to-top");
   const loadingOverlayEl = getRequiredElement<HTMLElement>("loading-overlay");
   const themeToggleEl = getRequiredElement<HTMLButtonElement>("theme-toggle");
-  const visibleCounts = new Map<string, number>();
-  let digestSections: DigestSection[] = [];
+  const pageIndexes = new Map<string, number>();
+  let digestSections = getInitialDigestPayload()?.sections ?? [];
 
   setupBackToTop(backToTopEl);
   setupThemeToggle(themeToggleEl);
+
+  const initialDigest = getInitialDigestPayload();
+  if (initialDigest) {
+    digestSections = applyDigestPayload(
+      initialDigest,
+      titleEl,
+      taglineEl,
+      updatedEl,
+      totalEl,
+      coverageEl,
+      navEl,
+      sectionsEl,
+      errorEl,
+      pageIndexes
+    );
+    hideLoadingOverlay(loadingOverlayEl);
+  }
 
   sectionsEl.addEventListener("click", (event) => {
     const target = event.target;
@@ -259,73 +363,65 @@ export function initDigestPage(endpoint = "/api/digest"): void {
       return;
     }
 
-    const button = target.closest<HTMLButtonElement>(".load-more-button");
+    const button = target.closest<HTMLButtonElement>(".pager-button");
 
-    if (!button) {
+    if (!button || button.disabled) {
       return;
     }
 
     const sectionId = button.dataset.sectionId;
+    const direction = button.dataset.direction;
     const section = digestSections.find((item) => item.id === sectionId);
 
-    if (!section || !sectionId) {
+    if (!section || !sectionId || (direction !== "next" && direction !== "prev")) {
       return;
     }
 
-    const current = visibleCounts.get(sectionId) ?? SECTION_PAGE_SIZE;
-    const nextCount = Math.min(section.entries.length, current + SECTION_PAGE_SIZE);
+    const currentPage = pageIndexes.get(sectionId) ?? 0;
+    const pageCount = Math.max(1, Math.ceil(section.entries.length / SECTION_PAGE_SIZE));
+    const nextPage =
+      direction === "next"
+        ? Math.min(pageCount - 1, currentPage + 1)
+        : Math.max(0, currentPage - 1);
 
-    if (nextCount === current) {
+    if (nextPage === currentPage) {
       return;
     }
 
-    visibleCounts.set(sectionId, nextCount);
+    pageIndexes.set(sectionId, nextPage);
 
     const currentSectionEl = sectionsEl.querySelector<HTMLElement>(`#${CSS.escape(sectionId)}`);
     if (!currentSectionEl) {
       return;
     }
 
-    currentSectionEl.outerHTML = renderSection(section, nextCount);
+    currentSectionEl.outerHTML = renderSection(section, nextPage);
   });
 
-  fetch(endpoint)
-    .then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}`);
-      }
-
-      return (await response.json()) as DigestPayload;
-    })
+  fetchDigestPayload(endpoint)
     .then((digest) => {
-      digestSections = digest.sections;
-      titleEl.textContent = digest.site.title;
-      taglineEl.textContent = digest.site.tagline;
-      updatedEl.textContent = formatGeneratedAt(digest.generatedAt, digest.generatedAtDisplay);
-      totalEl.textContent = String(digest.totalEntries);
-      coverageEl.textContent = `${digestSections.length} streams`;
-      renderNav(navEl, digestSections);
-
-      for (const section of digestSections) {
-        visibleCounts.set(section.id, Math.min(section.entries.length, SECTION_PAGE_SIZE));
-      }
-      renderSections(sectionsEl, digestSections, visibleCounts);
-
-      const isLocal =
-        window.location.hostname === "localhost" ||
-        window.location.hostname === "127.0.0.1" ||
-        window.location.hostname.endsWith(".local");
-
-      if (isLocal) {
-        showDiagnostics(errorEl, digest.diagnostics);
-      }
-
+      digestSections = applyDigestPayload(
+        digest,
+        titleEl,
+        taglineEl,
+        updatedEl,
+        totalEl,
+        coverageEl,
+        navEl,
+        sectionsEl,
+        errorEl,
+        pageIndexes
+      );
       hideLoadingOverlay(loadingOverlayEl);
     })
     .catch((error) => {
       console.error("Failed to load digest", error);
-      showError(errorEl, "Failed to load digest data from the backend.");
-      navEl.innerHTML = '<span class="section-nav__link">Digest unavailable</span>';
+
+      if (digestSections.length === 0) {
+        showError(errorEl, "Failed to load digest data from the backend API.");
+        navEl.innerHTML = '<span class="section-nav__link">Digest unavailable</span>';
+      }
+
       hideLoadingOverlay(loadingOverlayEl);
     });
 }

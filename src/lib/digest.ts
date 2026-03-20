@@ -10,7 +10,7 @@ interface FeedConfig {
 
 interface HtmlSourceConfig {
   url: string;
-  type: Extract<EntryType, "news">;
+  type: Extract<EntryType, "journal" | "news">;
   label: string;
 }
 
@@ -28,6 +28,11 @@ const RSS_FEEDS: FeedConfig[] = [
 ];
 
 const HTML_SOURCES: HtmlSourceConfig[] = [
+  {
+    url: "https://www.thelancet.com/journals/lancet/home",
+    type: "journal",
+    label: "The Lancet"
+  },
   {
     url: "https://www.hematology.org/newsroom",
     type: "news",
@@ -310,6 +315,213 @@ async function fetchFeedEntries(feed: FeedConfig): Promise<FetchResult> {
   }
 }
 
+async function fetchLancetPubMedFallback(source: HtmlSourceConfig, reason: string): Promise<FetchResult> {
+  try {
+    const searchUrl = new URL("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi");
+    searchUrl.searchParams.set("db", "pubmed");
+    searchUrl.searchParams.set("retmode", "json");
+    searchUrl.searchParams.set("retmax", "12");
+    searchUrl.searchParams.set(
+      "term",
+      '("Lancet"[Journal] OR "Lancet Haematol"[Journal]) AND (hematology OR leukemia OR lymphoma OR myeloma OR anemia OR thrombocytopenia)'
+    );
+
+    if (PUBMED_TOOL) {
+      searchUrl.searchParams.set("tool", PUBMED_TOOL);
+    }
+
+    if (PUBMED_EMAIL) {
+      searchUrl.searchParams.set("email", PUBMED_EMAIL);
+    }
+
+    const searchData = (await fetchJsonWithRetry(searchUrl)) as {
+      esearchresult?: { idlist?: string[] };
+    };
+
+    const ids = ensureArray(searchData.esearchresult?.idlist).slice(0, 12);
+
+    if (ids.length === 0) {
+      return {
+        entries: [],
+        diagnostic: {
+          kind: "feed",
+          id: source.url,
+          label: source.label,
+          status: "empty",
+          itemCount: 0,
+          message: `Homepage blocked (${reason}); PubMed fallback returned no usable Lancet articles.`
+        }
+      };
+    }
+
+    const summaryUrl = new URL("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi");
+    summaryUrl.searchParams.set("db", "pubmed");
+    summaryUrl.searchParams.set("retmode", "json");
+    summaryUrl.searchParams.set("id", ids.join(","));
+
+    if (PUBMED_TOOL) {
+      summaryUrl.searchParams.set("tool", PUBMED_TOOL);
+    }
+
+    if (PUBMED_EMAIL) {
+      summaryUrl.searchParams.set("email", PUBMED_EMAIL);
+    }
+
+    const summaryData = (await fetchJsonWithRetry(summaryUrl)) as {
+      result?: Record<string, PubMedDocSummary>;
+    };
+
+    const entries = ids.flatMap((pmid) => {
+      const article = summaryData.result?.[pmid];
+      if (!article) {
+        return [];
+      }
+
+      const authorNames = ensureArray(article.authors)
+        .map((author) => author?.name?.trim())
+        .filter((name): name is string => Boolean(name))
+        .slice(0, 3);
+
+      return [
+        createEntry({
+          title: cleanText(article.title, 220),
+          link: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
+          summary: cleanText(`${article.source ?? source.label} | ${authorNames.join(", ") || "Authors unavailable"}`, 220),
+          published: article.pubdate ?? "No date",
+          publishedIso: null,
+          source: source.label,
+          type: source.type
+        })
+      ];
+    });
+
+    return {
+      entries,
+      diagnostic: {
+        kind: "feed",
+        id: source.url,
+        label: source.label,
+        status: entries.length > 0 ? "ok" : "empty",
+        itemCount: entries.length,
+        message: entries.length > 0 ? `Homepage blocked (${reason}); using PubMed fallback.` : `Homepage blocked (${reason}); PubMed fallback returned no usable Lancet articles.`
+      }
+    };
+  } catch (error) {
+    return {
+      entries: [],
+      diagnostic: {
+        kind: "feed",
+        id: source.url,
+        label: source.label,
+        status: "error",
+        itemCount: 0,
+        message: `Homepage blocked (${reason}); PubMed fallback failed: ${getErrorMessage(error)}`
+      }
+    };
+  }
+}
+
+function parseLancetHomeDate(fragment: string): { published: string; publishedIso: string | null } {
+  const cleaned = decodeHtmlEntities(fragment).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const match = cleaned.match(
+    /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}\b/i
+  );
+
+  if (!match) {
+    return {
+      published: "Recent",
+      publishedIso: null
+    };
+  }
+
+  const published = match[0];
+  const parsed = parseDate(published);
+
+  return {
+    published,
+    publishedIso: parsed?.toISOString() ?? null
+  };
+}
+
+async function fetchHtmlEntries(source: HtmlSourceConfig): Promise<FetchResult> {
+  if (source.label === "The Lancet") {
+    return fetchLancetHomeEntries(source);
+  }
+
+  return fetchAshPressReleaseEntries(source);
+}
+
+async function fetchLancetHomeEntries(source: HtmlSourceConfig): Promise<FetchResult> {
+  try {
+    const html = await fetchText(source.url);
+    const matches = Array.from(
+      html.matchAll(/<a[^>]+href="(\/journals\/lancet\/article\/[^"]+)"[^>]*>(.*?)<\/a>/gsi)
+    );
+
+    const seen = new Set<string>();
+    const entries: DigestEntry[] = [];
+
+    for (const match of matches) {
+      const path = match[1];
+      const rawTitle = match[2];
+      const title = cleanText(rawTitle, 220);
+      const contextFragment = html.slice(match.index ?? 0, (match.index ?? 0) + 1800);
+      const { published, publishedIso } = parseLancetHomeDate(contextFragment);
+
+      if (!path || !title || title === "No summary available." || seen.has(path)) {
+        continue;
+      }
+
+      seen.add(path);
+      entries.push(
+        createEntry({
+          title,
+          link: new URL(path, source.url).toString(),
+          summary: "Recent article surfaced from The Lancet journal homepage.",
+          published,
+          publishedIso,
+          source: source.label,
+          type: source.type
+        })
+      );
+
+      if (entries.length >= 20) {
+        break;
+      }
+    }
+
+    return {
+      entries,
+      diagnostic: {
+        kind: "feed",
+        id: source.url,
+        label: source.label,
+        status: entries.length > 0 ? "ok" : "empty",
+        itemCount: entries.length,
+        message: entries.length > 0 ? undefined : "No Lancet article links were parsed from the journal homepage."
+      }
+    };
+  } catch (error) {
+    console.error(`Failed to fetch HTML source ${source.url}`, error);
+
+    if (error instanceof Error && error.message.includes(": 403")) {
+      return fetchLancetPubMedFallback(source, "403");
+    }
+
+    return {
+      entries: [],
+      diagnostic: {
+        kind: "feed",
+        id: source.url,
+        label: source.label,
+        status: "error",
+        itemCount: 0,
+        message: error instanceof Error ? error.message : "Unknown HTML source error"
+      }
+    };
+  }
+}
+
 async function fetchAshPressReleaseEntries(source: HtmlSourceConfig): Promise<FetchResult> {
   try {
     const html = await fetchText(source.url);
@@ -491,7 +703,7 @@ export async function getDigestData(): Promise<DigestPayload> {
 
   const [feedResults, htmlResults] = await Promise.all([
     Promise.all(RSS_FEEDS.map((feed) => fetchFeedEntries(feed))),
-    Promise.all(HTML_SOURCES.map((source) => fetchAshPressReleaseEntries(source)))
+    Promise.all(HTML_SOURCES.map((source) => fetchHtmlEntries(source)))
   ]);
 
   const diagnostics = [...pubmedResults, ...feedResults, ...htmlResults].map((result) => result.diagnostic);
@@ -526,11 +738,10 @@ export async function getDigestData(): Promise<DigestPayload> {
     totalEntries: entries.length,
     sources: [
       "PubMed",
-      "Blood",
       "British Journal of Haematology",
       "Leukemia",
       "American Journal of Hematology",
-      "ASH",
+      "The Lancet",
       "ASH Press Releases"
     ],
     sections,

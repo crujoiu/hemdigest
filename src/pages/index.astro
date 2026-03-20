@@ -1,7 +1,9 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
+import { getDigestData } from "../lib/digest";
 
 const pageTitle = "Hematology Digest | Latest Research & News";
+const initialDigest = await getDigestData();
 ---
 
 <BaseLayout title={pageTitle} description="Hematology research, journals, and specialty news in one digest.">
@@ -14,17 +16,16 @@ const pageTitle = "Hematology Digest | Latest Research & News";
     </div>
   </div>
 
-  <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
-    <span class="theme-toggle__track">
-      <span class="theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true">Sun</span>
-      <span class="theme-toggle__thumb"></span>
-      <span class="theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true">Moon</span>
-    </span>
-  </button>
-
   <main class="page-shell" id="main-content">
     <section class="hero">
       <div class="hero__content">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
+          <span class="theme-toggle__track">
+            <span class="theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true">Sun</span>
+            <span class="theme-toggle__thumb"></span>
+            <span class="theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true">Moon</span>
+          </span>
+        </button>
         <p class="hero__eyebrow">Clinical Briefing</p>
         <h1 id="digest-title">Hematology Digest</h1>
         <p class="hero__tagline" id="digest-tagline">
@@ -72,6 +73,8 @@ const pageTitle = "Hematology Digest | Latest Research & News";
       JavaScript is required to load the live digest content from the backend API.
     </div>
   </noscript>
+
+  <script id="digest-initial-data" type="application/json" set:html={JSON.stringify(initialDigest)}></script>
 
   <script>
     import "../lib/digest-page";
