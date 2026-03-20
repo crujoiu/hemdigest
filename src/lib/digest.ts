@@ -30,7 +30,11 @@ interface HtmlSourceConfig {
 interface PubMedDocSummary {
   title?: string;
   pubdate?: string;
+  epubdate?: string;
+  sortpubdate?: string;
   source?: string;
+  fulljournalname?: string;
+  pubtype?: string[];
   authors?: Array<{ name?: string }>;
 }
 
@@ -102,6 +106,33 @@ const TITLE_STOP_WORDS = new Set([
   "update",
   "report"
 ]);
+
+function mapPubMedPublicationTypes(pubTypes: string[]): { contentTypeHints: ContentTag[]; studyTypeHint?: string; rationaleHint?: string } {
+  const lowered = pubTypes.map((value) => value.toLowerCase());
+  const hints = new Set<ContentTag>();
+
+  if (lowered.some((value) => value.includes("guideline") || value.includes("consensus"))) {
+    hints.add("guideline");
+  }
+
+  if (lowered.some((value) => value.includes("review") || value.includes("meta-analysis"))) {
+    hints.add("review");
+  }
+
+  if (lowered.some((value) => value.includes("clinical trial") || value.includes("randomized") || value.includes("randomised"))) {
+    hints.add("trial");
+  }
+
+  if (lowered.some((value) => value.includes("news") || value.includes("editorial"))) {
+    hints.add("news-update");
+  }
+
+  return {
+    contentTypeHints: Array.from(hints),
+    studyTypeHint: pubTypes.length > 0 ? pubTypes.slice(0, 2).join(" / ") : undefined,
+    rationaleHint: pubTypes.length > 0 ? `PubMed publication types: ${pubTypes.slice(0, 3).join(", ")}.` : undefined
+  };
+}
 
 interface FetchResult {
   entries: DigestEntry[];
@@ -344,34 +375,45 @@ function detectSampleSize(text: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function deriveEvidence(text: string, contentTypes: ContentTag[], type: EntryType): EvidenceSnapshot {
+function deriveEvidence(
+  text: string,
+  contentTypes: ContentTag[],
+  type: EntryType,
+  hints?: {
+    studyTypeHint?: string;
+    phaseHint?: string | null;
+    sampleSizeHint?: number | null;
+    rationaleHint?: string;
+    levelHint?: EvidenceLevel;
+  }
+): EvidenceSnapshot {
   const lower = text.toLowerCase();
-  const sampleSize = detectSampleSize(text);
+  const sampleSize = hints?.sampleSizeHint ?? detectSampleSize(text);
 
-  let level: EvidenceLevel = "news";
-  let studyType = type === "news" ? "News update" : "Research report";
-  let phase: string | null = null;
+  let level: EvidenceLevel = hints?.levelHint ?? "news";
+  let studyType = hints?.studyTypeHint ?? (type === "news" ? "News update" : "Research report");
+  let phase: string | null = hints?.phaseHint ?? null;
 
   if (contentTypes.includes("guideline")) {
     level = "guideline";
-    studyType = "Guideline / consensus";
+    studyType = hints?.studyTypeHint ?? "Guideline / consensus";
   } else if (/phase\s*3/i.test(text)) {
     level = "phase-3";
-    studyType = "Interventional trial";
+    studyType = hints?.studyTypeHint ?? "Interventional trial";
     phase = "Phase 3";
   } else if (/phase\s*2/i.test(text)) {
     level = "phase-2";
-    studyType = "Interventional trial";
+    studyType = hints?.studyTypeHint ?? "Interventional trial";
     phase = "Phase 2";
   } else if (contentTypes.includes("review")) {
     level = "review";
-    studyType = "Review / synthesis";
+    studyType = hints?.studyTypeHint ?? "Review / synthesis";
   } else if (/cohort|retrospective|registry|observational/i.test(text)) {
     level = "observational";
-    studyType = "Observational study";
+    studyType = hints?.studyTypeHint ?? "Observational study";
   } else if (type !== "news") {
     level = "observational";
-    studyType = lower.includes("trial") ? "Interventional trial" : "Research report";
+    studyType = hints?.studyTypeHint ?? (lower.includes("trial") ? "Interventional trial" : "Research report");
   }
 
   return {
@@ -380,13 +422,14 @@ function deriveEvidence(text: string, contentTypes: ContentTag[], type: EntryTyp
     phase,
     sampleSize,
     rationale:
-      level === "guideline"
+      hints?.rationaleHint ??
+      (level === "guideline"
         ? "Likely practice-facing guidance."
         : phase
           ? `Potentially high-impact ${phase.toLowerCase()} evidence.`
           : sampleSize
             ? `Includes an explicit cohort size of ${sampleSize}.`
-            : "Evidence level inferred from title and source metadata."
+            : "Evidence level inferred from title and source metadata.")
   };
 }
 
@@ -481,12 +524,23 @@ function buildWhyItMatters(
   };
 }
 
-function createEntry(entry: Omit<DigestEntry, "id" | "topics" | "contentTypes" | "audiences" | "evidence" | "score" | "dedupeKey" | "isPrimarySource" | "whyItMatters" | "transparency">): DigestEntry {
-  const analysisText = `${entry.title} ${entry.summary} ${entry.source}`;
+function createEntry(
+  entry: Omit<DigestEntry, "id" | "topics" | "contentTypes" | "audiences" | "evidence" | "score" | "dedupeKey" | "isPrimarySource" | "whyItMatters" | "transparency">,
+  hints?: {
+    classificationText?: string;
+    contentTypeHints?: ContentTag[];
+    studyTypeHint?: string;
+    phaseHint?: string | null;
+    sampleSizeHint?: number | null;
+    rationaleHint?: string;
+    levelHint?: EvidenceLevel;
+  }
+): DigestEntry {
+  const analysisText = `${entry.title} ${entry.summary} ${entry.source} ${hints?.classificationText ?? ""}`.trim();
   const topics = extractTopics(analysisText);
-  const contentTypes = extractContentTypes(analysisText, entry.type);
+  const contentTypes = Array.from(new Set([...extractContentTypes(analysisText, entry.type), ...(hints?.contentTypeHints ?? [])]));
   const audiences = deriveAudiences(contentTypes, topics, entry.type);
-  const evidence = deriveEvidence(analysisText, contentTypes, entry.type);
+  const evidence = deriveEvidence(analysisText, contentTypes, entry.type, hints);
   const isPrimarySource = entry.type !== "news";
   const dedupeKey = normalizeForDedupe(entry.title);
   const score = scoreEntry({
@@ -686,16 +740,21 @@ async function fetchLancetPubMedFallback(source: HtmlSourceConfig, reason: strin
         .map((author) => author?.name?.trim())
         .filter((name): name is string => Boolean(name))
         .slice(0, 3);
+      const publicationTypes = ensureArray(article.pubtype).filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+      const publicationTypeHints = mapPubMedPublicationTypes(publicationTypes);
 
       return [
         createEntry({
           title: cleanText(article.title, 220),
           link: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
-          summary: cleanText(`${article.source ?? source.label} | ${authorNames.join(", ") || "Authors unavailable"}`, 220),
-          published: article.pubdate ?? "No date",
-          publishedIso: null,
+          summary: cleanText(`${article.fulljournalname ?? article.source ?? source.label} | ${authorNames.join(", ") || "Authors unavailable"}`, 220),
+          published: article.epubdate ?? article.pubdate ?? "No date",
+          publishedIso: article.sortpubdate ? parseDate(article.sortpubdate)?.toISOString() ?? null : null,
           source: source.label,
           type: source.type
+        }, {
+          classificationText: publicationTypes.join(" "),
+          ...publicationTypeHints
         })
       ];
     });
@@ -787,6 +846,10 @@ async function fetchLancetHomeEntries(source: HtmlSourceConfig): Promise<FetchRe
           publishedIso,
           source: source.label,
           type: source.type
+        }, {
+          contentTypeHints: ["research"],
+          studyTypeHint: "Journal article",
+          rationaleHint: "Classified from a major journal homepage listing."
         })
       );
 
@@ -856,6 +919,11 @@ async function fetchAshPressReleaseEntries(source: HtmlSourceConfig): Promise<Fe
           publishedIso,
           source: source.label,
           type: source.type
+        }, {
+          contentTypeHints: ["news-update"],
+          studyTypeHint: "Society press release",
+          levelHint: "news",
+          rationaleHint: "Classified from the ASH newsroom feed."
         })
       );
 
@@ -951,16 +1019,21 @@ async function fetchPubMedEntries(query: string, daysBack = 7): Promise<FetchRes
         .map((author) => author?.name?.trim())
         .filter((name): name is string => Boolean(name))
         .slice(0, 3);
+      const publicationTypes = ensureArray(article.pubtype).filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+      const publicationTypeHints = mapPubMedPublicationTypes(publicationTypes);
 
       return [
         createEntry({
           title: cleanText(article.title, 220),
           link: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
-          summary: cleanText(`${article.source ?? "PubMed"} | ${authorNames.join(", ") || "Authors unavailable"}`, 220),
-          published: article.pubdate ?? "No date",
-          publishedIso: null,
+          summary: cleanText(`${article.fulljournalname ?? article.source ?? "PubMed"} | ${authorNames.join(", ") || "Authors unavailable"}`, 220),
+          published: article.epubdate ?? article.pubdate ?? "No date",
+          publishedIso: article.sortpubdate ? parseDate(article.sortpubdate)?.toISOString() ?? null : null,
           source: "PubMed",
           type: "pubmed"
+        }, {
+          classificationText: publicationTypes.join(" "),
+          ...publicationTypeHints
         })
       ];
     });
