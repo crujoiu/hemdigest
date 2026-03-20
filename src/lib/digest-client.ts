@@ -110,7 +110,50 @@ function renderOverflowTag(count: number, className: string): string {
   return `<span class="${className} ${className}--overflow">+${count}</span>`;
 }
 
-function renderEntries(entries: DigestEntry[]): string {
+function getSearchMatchHints(entry: DigestEntry, query: string): string[] {
+  const normalizedQuery = normalizeSearchText(query);
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const tokens = getSearchTokens(normalizedQuery);
+  const title = normalizeSearchText(entry.title);
+  const summary = normalizeSearchText(entry.summary);
+  const source = normalizeSearchText(entry.source);
+  const topics = entry.topics.map((topic) => normalizeSearchText(topic));
+  const contentTypes = entry.contentTypes.map((contentType) => normalizeSearchText(contentType));
+  const audiences = entry.audiences.map((audience) => normalizeSearchText(audience));
+  const hints = new Set<string>();
+
+  if (title.includes(normalizedQuery) || tokens.some((token) => title.includes(token))) {
+    hints.add("title");
+  }
+
+  if (topics.includes(normalizedQuery) || tokens.some((token) => topics.includes(token))) {
+    hints.add("topic");
+  }
+
+  if (
+    contentTypes.includes(normalizedQuery) ||
+    audiences.includes(normalizedQuery) ||
+    tokens.some((token) => contentTypes.includes(token) || audiences.includes(token))
+  ) {
+    hints.add("tags");
+  }
+
+  if (summary.includes(normalizedQuery) || tokens.some((token) => summary.includes(token))) {
+    hints.add("summary");
+  }
+
+  if (source.includes(normalizedQuery) || tokens.some((token) => source.includes(token))) {
+    hints.add("source");
+  }
+
+  return Array.from(hints).slice(0, 3);
+}
+
+function renderEntries(entries: DigestEntry[], searchQuery = ""): string {
   return entries
     .map(
       (entry) => {
@@ -128,6 +171,15 @@ function renderEntries(entries: DigestEntry[]): string {
           .filter(Boolean)
           .join(" • ");
         const transparencySummary = entry.transparency.matchedBecause.slice(0, 2).join(" • ") || "Matched by source and text signals";
+        const searchMatchHints = getSearchMatchHints(entry, searchQuery);
+        const searchHintMarkup =
+          searchMatchHints.length > 0
+            ? `
+          <p class="entry-card__search-match">
+            Matched in ${escapeHtml(searchMatchHints.map((hint) => titleCase(hint)).join(" • "))}
+          </p>
+        `
+            : "";
 
         return `
         <article class="entry-card entry-card--${escapeAttribute(entry.type)}">
@@ -147,6 +199,7 @@ function renderEntries(entries: DigestEntry[]): string {
           </h3>
 
           <p class="entry-card__summary">${escapeHtml(entry.summary)}</p>
+          ${searchHintMarkup}
           <div class="entry-card__why-block">
             <p class="entry-card__why-label">Why it matters</p>
             <p class="entry-card__why">${escapeHtml(entry.whyItMatters.summary)}</p>
@@ -240,10 +293,79 @@ function isEntryNew(entry: DigestEntry, seenEntries: Set<string>): boolean {
   return !seenEntries.has(entry.id);
 }
 
-function matchesFilter(entry: DigestEntry, filterState: FilterState, bookmarks: Set<string>, seenEntries: Set<string>): boolean {
-  const haystack = `${entry.title} ${entry.summary} ${entry.source} ${entry.topics.join(" ")} ${entry.contentTypes.join(" ")}`.toLowerCase();
+function normalizeSearchText(value: string): string {
+  return value.trim().toLowerCase();
+}
 
-  if (filterState.search && !haystack.includes(filterState.search.toLowerCase())) {
+function getSearchTokens(value: string): string[] {
+  return normalizeSearchText(value)
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function getSearchScore(entry: DigestEntry, query: string): number {
+  const normalizedQuery = normalizeSearchText(query);
+
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const tokens = getSearchTokens(normalizedQuery);
+  const title = normalizeSearchText(entry.title);
+  const summary = normalizeSearchText(entry.summary);
+  const source = normalizeSearchText(entry.source);
+  const topics = entry.topics.map((topic) => normalizeSearchText(topic));
+  const contentTypes = entry.contentTypes.map((contentType) => normalizeSearchText(contentType));
+  const audiences = entry.audiences.map((audience) => normalizeSearchText(audience));
+  let score = 0;
+
+  if (title.includes(normalizedQuery)) {
+    score += title.startsWith(normalizedQuery) ? 18 : 12;
+  }
+
+  if (topics.includes(normalizedQuery)) {
+    score += 10;
+  }
+
+  if (contentTypes.includes(normalizedQuery) || audiences.includes(normalizedQuery)) {
+    score += 7;
+  }
+
+  if (source.includes(normalizedQuery)) {
+    score += 4;
+  }
+
+  if (summary.includes(normalizedQuery)) {
+    score += 3;
+  }
+
+  for (const token of tokens) {
+    if (title.includes(token)) {
+      score += 4;
+    }
+
+    if (topics.includes(token)) {
+      score += 5;
+    }
+
+    if (contentTypes.includes(token) || audiences.includes(token)) {
+      score += 3;
+    }
+
+    if (summary.includes(token)) {
+      score += 1.5;
+    }
+
+    if (source.includes(token)) {
+      score += 1;
+    }
+  }
+
+  return score;
+}
+
+function matchesFilter(entry: DigestEntry, filterState: FilterState, bookmarks: Set<string>, seenEntries: Set<string>): boolean {
+  if (filterState.search && getSearchScore(entry, filterState.search) <= 0) {
     return false;
   }
 
@@ -435,14 +557,14 @@ function renderActiveFilters(target: HTMLElement, filterState: FilterState, dige
   target.innerHTML = chips.join("");
 }
 
-function renderSection(section: DigestSection, pageIndex: number): string {
+function renderSection(section: DigestSection, pageIndex: number, searchQuery: string): string {
   const pageCount = Math.max(1, Math.ceil(section.entries.length / SECTION_PAGE_SIZE));
   const safePageIndex = Math.min(Math.max(pageIndex, 0), pageCount - 1);
   const start = safePageIndex * SECTION_PAGE_SIZE;
   const visibleEntries = section.entries.slice(start, start + SECTION_PAGE_SIZE);
   const sectionBody =
     visibleEntries.length > 0
-      ? `<div class="digest-section__grid">${renderEntries(visibleEntries)}</div>`
+      ? `<div class="digest-section__grid">${renderEntries(visibleEntries, searchQuery)}</div>`
       : `
         <div class="empty-state">
           <p>No entries available yet for this section.</p>
@@ -484,7 +606,7 @@ function renderSection(section: DigestSection, pageIndex: number): string {
   `;
 }
 
-function renderSections(target: HTMLElement, sections: DigestSection[], pageIndexes: Map<string, number>): void {
+function renderSections(target: HTMLElement, sections: DigestSection[], pageIndexes: Map<string, number>, searchQuery: string): void {
   if (sections.length === 0) {
     target.innerHTML = `
       <div class="empty-state">
@@ -496,7 +618,7 @@ function renderSections(target: HTMLElement, sections: DigestSection[], pageInde
   }
 
   target.innerHTML = sections
-    .map((section) => renderSection(section, pageIndexes.get(section.id) ?? 0))
+    .map((section) => renderSection(section, pageIndexes.get(section.id) ?? 0, searchQuery))
     .join("");
 }
 
@@ -593,9 +715,36 @@ function filterSections(
   bookmarks: Set<string>,
   seenEntries: Set<string>
 ): DigestSection[] {
+  const hasSearch = Boolean(normalizeSearchText(filterState.search));
+
   return sections
     .map((section) => {
-      const filteredEntries = section.entries.filter((entry) => matchesFilter(entry, filterState, bookmarks, seenEntries));
+      const filteredEntries = section.entries
+        .filter((entry) => matchesFilter(entry, filterState, bookmarks, seenEntries))
+        .map((entry) => ({
+          entry,
+          searchScore: hasSearch ? getSearchScore(entry, filterState.search) : 0
+        }))
+        .sort((left, right) => {
+          if (right.searchScore !== left.searchScore) {
+            return right.searchScore - left.searchScore;
+          }
+
+          if (right.entry.score !== left.entry.score) {
+            return right.entry.score - left.entry.score;
+          }
+
+          const rightPublished = Date.parse(right.entry.publishedIso ?? right.entry.published);
+          const leftPublished = Date.parse(left.entry.publishedIso ?? left.entry.published);
+
+          if (!Number.isNaN(rightPublished) && !Number.isNaN(leftPublished) && rightPublished !== leftPublished) {
+            return rightPublished - leftPublished;
+          }
+
+          return left.entry.title.localeCompare(right.entry.title);
+        })
+        .map(({ entry }) => entry);
+
       return {
         ...section,
         count: filteredEntries.length,
@@ -641,7 +790,7 @@ function applyDigestPayload(
     pageIndexes.set(section.id, 0);
   }
 
-  renderSections(sectionsEl, digestSections, pageIndexes);
+  renderSections(sectionsEl, digestSections, pageIndexes, filterState.search);
 
   const isLocal =
     window.location.hostname === "localhost" ||

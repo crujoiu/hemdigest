@@ -812,6 +812,14 @@ a {
   color: var(--muted);
 }
 
+.entry-card__search-match {
+  margin: -6px 0 14px;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .entry-card__why-block {
   margin: -4px 0 16px;
   padding: 14px 16px;
