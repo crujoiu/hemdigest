@@ -12,6 +12,7 @@ import type {
   EntryType,
   EvidenceLevel,
   EvidenceSnapshot,
+  TherapyTag,
   TopicTag
 } from "./digest-types";
 
@@ -68,15 +69,80 @@ const PUBMED_QUERIES = [
   "anemia OR thrombocytopenia"
 ];
 
-const TOPIC_RULES: Array<{ tag: TopicTag; label: string; patterns: RegExp[] }> = [
-  { tag: "aml", label: "AML", patterns: [/\baml\b/i, /\bacute myeloid leukemia\b/i] },
-  { tag: "all", label: "ALL", patterns: [/\ball\b/i, /\bacute lymphoblastic leukemia\b/i] },
-  { tag: "lymphoma", label: "Lymphoma", patterns: [/\blymphoma\b/i, /\bhodgkin\b/i, /\bnon-hodgkin\b/i] },
-  { tag: "myeloma", label: "Myeloma", patterns: [/\bmyeloma\b/i, /\bmultiple myeloma\b/i] },
-  { tag: "mpn", label: "MPN", patterns: [/\bmpn\b/i, /\bmyeloproliferative\b/i, /\bpolycythemia vera\b/i, /\bmyelofibrosis\b/i] },
-  { tag: "anemia", label: "Anemia", patterns: [/\banemia\b/i, /\banaemia\b/i, /\bsickle cell\b/i] },
-  { tag: "thrombosis", label: "Thrombosis", patterns: [/\bthromb/i, /\bcoagulation\b/i, /\bvenous thromboembolism\b/i] },
-  { tag: "transplant", label: "Transplant", patterns: [/\btransplant\b/i, /\bhsct\b/i, /\bstem cell transplant\b/i] }
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildAliasPattern(alias: string): RegExp {
+  const normalized = alias.trim().toLowerCase();
+
+  if (!normalized) {
+    return /$^/i;
+  }
+
+  if (normalized.includes(" ")) {
+    return new RegExp(`\\b${normalized.split(/\s+/).map(escapeRegExp).join("\\s+")}\\b`, "i");
+  }
+
+  return new RegExp(`\\b${escapeRegExp(normalized)}\\b`, "i");
+}
+
+const TOPIC_RULES: Array<{ tag: TopicTag; label: string; aliases: string[]; patterns: RegExp[] }> = [
+  {
+    tag: "aml",
+    label: "AML",
+    aliases: ["aml", "acute myeloid leukemia", "acute myelogenous leukemia"],
+    patterns: ["aml", "acute myeloid leukemia", "acute myelogenous leukemia"].map(buildAliasPattern)
+  },
+  {
+    tag: "all",
+    label: "ALL",
+    aliases: ["all", "acute lymphoblastic leukemia", "acute lymphocytic leukemia"],
+    patterns: ["all", "acute lymphoblastic leukemia", "acute lymphocytic leukemia"].map(buildAliasPattern)
+  },
+  {
+    tag: "lymphoma",
+    label: "Lymphoma",
+    aliases: ["lymphoma", "hodgkin lymphoma", "hodgkin", "non hodgkin", "non-hodgkin", "nhl"],
+    patterns: ["lymphoma", "hodgkin lymphoma", "hodgkin", "non hodgkin", "non-hodgkin", "nhl"].map(buildAliasPattern)
+  },
+  {
+    tag: "myeloma",
+    label: "Myeloma",
+    aliases: ["myeloma", "multiple myeloma"],
+    patterns: ["myeloma", "multiple myeloma"].map(buildAliasPattern)
+  },
+  {
+    tag: "mpn",
+    label: "MPN",
+    aliases: ["mpn", "myeloproliferative", "myelofibrosis", "polycythemia vera", "essential thrombocythemia"],
+    patterns: ["mpn", "myeloproliferative", "myelofibrosis", "polycythemia vera", "essential thrombocythemia"].map(buildAliasPattern)
+  },
+  {
+    tag: "anemia",
+    label: "Anemia",
+    aliases: ["anemia", "anaemia", "sickle cell", "hemolytic anemia"],
+    patterns: ["anemia", "anaemia", "sickle cell", "hemolytic anemia"].map(buildAliasPattern)
+  },
+  {
+    tag: "thrombosis",
+    label: "Thrombosis",
+    aliases: ["thrombosis", "thromboembolism", "venous thromboembolism", "vte", "coagulation"],
+    patterns: [
+      buildAliasPattern("thrombosis"),
+      /\bthromb/i,
+      buildAliasPattern("thromboembolism"),
+      buildAliasPattern("venous thromboembolism"),
+      buildAliasPattern("vte"),
+      buildAliasPattern("coagulation")
+    ]
+  },
+  {
+    tag: "transplant",
+    label: "Transplant",
+    aliases: ["transplant", "hsct", "bmt", "bone marrow transplant", "stem cell transplant"],
+    patterns: ["transplant", "hsct", "bmt", "bone marrow transplant", "stem cell transplant"].map(buildAliasPattern)
+  }
 ];
 
 const CONTENT_RULES: Array<{ tag: ContentTag; label: string; patterns: RegExp[] }> = [
@@ -86,6 +152,38 @@ const CONTENT_RULES: Array<{ tag: ContentTag; label: string; patterns: RegExp[] 
   { tag: "trial", label: "Trial", patterns: [/\bphase\s*[1-3]\b/i, /\btrial\b/i, /\brandomized\b/i, /\brandomised\b/i] },
   { tag: "review", label: "Review", patterns: [/\breview\b/i, /\bmeta-analysis\b/i, /\bsystematic review\b/i] },
   { tag: "news-update", label: "News", patterns: [/\bpress release\b/i, /\bnews\b/i, /\bupdate\b/i, /\bannounces\b/i] }
+];
+const THERAPY_RULES: Array<{ tag: TherapyTag; label: string; patterns: RegExp[] }> = [
+  {
+    tag: "car-t",
+    label: "CAR-T",
+    patterns: [/\bcar[\s-]?t\b/i, /\bchimeric antigen receptor t[\s-]?cell\b/i, /\baxi-cel\b/i, /\btisa-cel\b/i, /\bliso-cel\b/i]
+  },
+  {
+    tag: "bispecific",
+    label: "Bispecific",
+    patterns: [/\bbispecific\b/i, /\bbispecific antibody\b/i, /\bt[\s-]?cell engager\b/i, /\bepcoritamab\b/i, /\bmosunetuzumab\b/i]
+  },
+  {
+    tag: "anticoagulation",
+    label: "Anticoagulation",
+    patterns: [/\banticoag/i, /\bdoac\b/i, /\bwarfarin\b/i, /\bheparin\b/i, /\bapixaban\b/i, /\brivaroxaban\b/i]
+  },
+  {
+    tag: "transplant-conditioning",
+    label: "Conditioning",
+    patterns: [/\bconditioning\b/i, /\bmyeloablative\b/i, /\breduced intensity\b/i, /\bnonmyeloablative\b/i]
+  },
+  {
+    tag: "stem-cell-transplant",
+    label: "Stem Cell Transplant",
+    patterns: [/\bhsct\b/i, /\bbmt\b/i, /\bstem cell transplant\b/i, /\bbone marrow transplant\b/i, /\ballogeneic transplant\b/i]
+  },
+  {
+    tag: "targeted-therapy",
+    label: "Targeted Therapy",
+    patterns: [/\btyrosine kinase inhibitor\b/i, /\btki\b/i, /\bjak inhibitor\b/i, /\bbtk inhibitor\b/i, /\bflt3 inhibitor\b/i, /\btargeted therapy\b/i]
+  }
 ];
 
 const TITLE_STOP_WORDS = new Set([
@@ -368,6 +466,17 @@ function extractContentTypes(text: string, type: EntryType): ContentTag[] {
   return ["research"];
 }
 
+function extractTherapySignals(text: string): TherapyTag[] {
+  const signals = THERAPY_RULES.filter((rule) => rule.patterns.some((pattern) => pattern.test(text))).map((rule) => rule.tag);
+
+  // Separate transplant procedures from conditioning regimens and avoid treating generic VTE disease mentions as anticoagulation.
+  if (signals.includes("car-t") && signals.includes("stem-cell-transplant") && !/\btransplant\b/i.test(text)) {
+    return signals.filter((signal) => signal !== "stem-cell-transplant");
+  }
+
+  return Array.from(new Set(signals));
+}
+
 function deriveAudiences(contentTypes: ContentTag[], topics: TopicTag[], type: EntryType): AudienceTag[] {
   const audiences = new Set<AudienceTag>(["researchers"]);
 
@@ -531,6 +640,7 @@ function scoreEntry(entry: {
   isPrimarySource: boolean;
   type: EntryType;
   topics: TopicTag[];
+  therapySignals: TherapyTag[];
   source: string;
 }): number {
   let score = 10;
@@ -576,6 +686,18 @@ function scoreEntry(entry: {
     score += 2;
   }
 
+  if (entry.therapySignals.includes("car-t") || entry.therapySignals.includes("bispecific")) {
+    score += 5;
+  }
+
+  if (entry.therapySignals.includes("anticoagulation")) {
+    score += 4;
+  }
+
+  if (entry.therapySignals.includes("stem-cell-transplant") || entry.therapySignals.includes("transplant-conditioning")) {
+    score += 4;
+  }
+
   if (source.includes("pubmed") || source.includes("lancet") || source.includes("american journal") || source.includes("leukemia")) {
     score += 6;
   }
@@ -595,6 +717,7 @@ function scoreEntry(entry: {
 function buildWhyItMatters(
   title: string,
   topics: TopicTag[],
+  therapySignals: TherapyTag[],
   contentTypes: ContentTag[],
   evidence: EvidenceSnapshot,
   source: string,
@@ -604,16 +727,19 @@ function buildWhyItMatters(
 ): DigestEntry["whyItMatters"] {
   const matchedSignals = [
     ...topics.filter((topic) => topic !== "general").map((topic) => `topic:${topic}`),
+    ...therapySignals.map((signal) => `therapy:${signal}`),
     ...contentTypes.map((tag) => `content:${tag}`),
     `evidence:${evidence.level}`,
     `source:${source}`
   ].slice(0, 5);
 
-  const readableTopic = topics.find((topic) => topic !== "general") ?? "general hematology";
+  const readableTopic = topicLabel(topics.find((topic) => topic !== "general") ?? "general");
+  const readableTherapy = therapySignals.length > 0 ? therapyLabel(therapySignals[0]) : "";
   const readableContent = contentTypes[0] ?? "research";
   const abstractText = hints?.abstractText ?? "";
   const outcomeSummary = buildOutcomeSummary(contentTypes, evidence, abstractText);
   const cohortSummary = evidence.sampleSize ? ` in a cohort of about ${evidence.sampleSize}` : "";
+  const therapySummary = readableTherapy ? ` around ${readableTherapy}` : "";
   const evidenceSummary =
     evidence.level === "guideline"
       ? "guideline-level direction"
@@ -622,13 +748,13 @@ function buildWhyItMatters(
         : evidence.studyType.toLowerCase();
 
   return {
-    summary: `Relevant to ${readableTopic}, this ${readableContent} item contributes ${evidenceSummary}${cohortSummary} and ${outcomeSummary}.`,
+    summary: `Relevant to ${readableTopic}${therapySummary}, this ${readableContent} item contributes ${evidenceSummary}${cohortSummary} and ${outcomeSummary}.`,
     matchedSignals
   };
 }
 
 function createEntry(
-  entry: Omit<DigestEntry, "id" | "topics" | "contentTypes" | "audiences" | "evidence" | "score" | "dedupeKey" | "isPrimarySource" | "whyItMatters" | "transparency">,
+  entry: Omit<DigestEntry, "id" | "topics" | "therapySignals" | "contentTypes" | "audiences" | "evidence" | "score" | "dedupeKey" | "isPrimarySource" | "whyItMatters" | "transparency">,
   hints?: {
     classificationText?: string;
     contentTypeHints?: ContentTag[];
@@ -642,6 +768,7 @@ function createEntry(
 ): DigestEntry {
   const analysisText = `${entry.title} ${entry.summary} ${entry.source} ${hints?.classificationText ?? ""}`.trim();
   const topics = extractTopics(analysisText);
+  const therapySignals = extractTherapySignals(analysisText);
   const contentTypes = Array.from(new Set([...extractContentTypes(analysisText, entry.type), ...(hints?.contentTypeHints ?? [])]));
   const audiences = deriveAudiences(contentTypes, topics, entry.type);
   const evidence = deriveEvidence(analysisText, contentTypes, entry.type, hints);
@@ -654,6 +781,7 @@ function createEntry(
     isPrimarySource,
     type: entry.type,
     topics,
+    therapySignals,
     source: entry.source
   });
 
@@ -661,16 +789,18 @@ function createEntry(
     ...entry,
     id: `${entry.type}-${slugify(entry.title || entry.link || entry.source)}`,
     topics,
+    therapySignals,
     contentTypes,
     audiences,
     evidence,
     score,
     dedupeKey,
     isPrimarySource,
-    whyItMatters: buildWhyItMatters(entry.title, topics, contentTypes, evidence, entry.source, hints),
+    whyItMatters: buildWhyItMatters(entry.title, topics, therapySignals, contentTypes, evidence, entry.source, hints),
     transparency: {
       matchedBecause: [
-        ...topics.filter((topic) => topic !== "general").map((topic) => `Topic match: ${topic.toUpperCase()}`),
+        ...topics.filter((topic) => topic !== "general").map((topic) => `Topic match: ${topicLabel(topic)}`),
+        ...therapySignals.map((signal) => `Therapy signal: ${therapyLabel(signal)}`),
         ...contentTypes.map((tag) => `Content type: ${tag}`)
       ].slice(0, 4),
       sourceType: entry.type,
@@ -1274,8 +1404,17 @@ function dedupeEntries(entries: DigestEntry[]): { dedupedEntries: DigestEntry[];
 }
 
 function topicLabel(topic: TopicTag): string {
+  if (topic === "general") {
+    return "General Hematology";
+  }
+
   const rule = TOPIC_RULES.find((item) => item.tag === topic);
   return rule?.label ?? "General";
+}
+
+function therapyLabel(signal: TherapyTag): string {
+  const rule = THERAPY_RULES.find((item) => item.tag === signal);
+  return rule?.label ?? signal;
 }
 
 function buildTopDevelopments(entries: DigestEntry[]): DigestTopDevelopment[] {
@@ -1312,6 +1451,7 @@ function buildTopDevelopments(entries: DigestEntry[]): DigestTopDevelopment[] {
     source: entry.source,
     link: entry.link,
     topic: entry.topics[0] ?? "general",
+    therapySignal: entry.therapySignals[0] ?? null,
     type: entry.type,
     score: entry.score,
     published: entry.published,
@@ -1334,6 +1474,25 @@ function buildTopicActivity(entries: DigestEntry[]): DigestTopicActivity[] {
     .map(([topic, count]) => ({
       topic,
       label: topicLabel(topic),
+      count
+    }));
+}
+
+function buildTherapyActivity(entries: DigestEntry[]): Array<{ therapy: TherapyTag; label: string; count: number }> {
+  const counts = new Map<TherapyTag, number>();
+
+  for (const entry of entries) {
+    for (const signal of entry.therapySignals) {
+      counts.set(signal, (counts.get(signal) ?? 0) + 1);
+    }
+  }
+
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([therapy, count]) => ({
+      therapy,
+      label: therapyLabel(therapy),
       count
     }));
 }
@@ -1391,20 +1550,24 @@ export async function getDigestData(): Promise<DigestPayload> {
       "The Lancet",
       "ASH Press Releases"
     ],
-    overview: {
-      topDevelopments: buildTopDevelopments(entries),
-      topicActivity: buildTopicActivity(entries),
-      sourceHealth: {
-        totalSources: diagnostics.length,
-        healthySources: diagnostics.filter((diagnostic) => diagnostic.status === "ok").length,
-        degradedSources: diagnostics.filter((diagnostic) => diagnostic.status !== "ok").length
+      overview: {
+        topDevelopments: buildTopDevelopments(entries),
+        topicActivity: buildTopicActivity(entries),
+        therapyActivity: buildTherapyActivity(entries),
+        sourceHealth: {
+          totalSources: diagnostics.length,
+          healthySources: diagnostics.filter((diagnostic) => diagnostic.status === "ok").length,
+          degradedSources: diagnostics.filter((diagnostic) => diagnostic.status !== "ok").length
+        },
+        savedPresetSuggestions: [
+        { id: "myeloma-trials", label: "Myeloma Trials", topic: "myeloma", therapy: "all", contentType: "trial", audience: "clinicians" },
+        { id: "aml-research", label: "AML Research", topic: "aml", therapy: "all", contentType: "research", audience: "researchers" },
+        { id: "approvals-watch", label: "Approvals Watch", topic: "all", therapy: "all", contentType: "approval", audience: "industry" },
+        { id: "car-t-watch", label: "CAR-T Watch", topic: "all", therapy: "car-t", contentType: "trial", audience: "clinicians" },
+        { id: "bispecific-trials", label: "Bispecific Trials", topic: "all", therapy: "bispecific", contentType: "trial", audience: "clinicians" },
+        { id: "conditioning-briefing", label: "Conditioning Briefing", topic: "transplant", therapy: "transplant-conditioning", contentType: "research", audience: "researchers" }
+        ]
       },
-      savedPresetSuggestions: [
-        { id: "myeloma-trials", label: "Myeloma Trials", topic: "myeloma", contentType: "trial", audience: "clinicians" },
-        { id: "aml-research", label: "AML Research", topic: "aml", contentType: "research", audience: "researchers" },
-        { id: "approvals-watch", label: "Approvals Watch", topic: "all", contentType: "approval", audience: "industry" }
-      ]
-    },
     sections,
     diagnostics
   };

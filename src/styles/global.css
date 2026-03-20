@@ -508,6 +508,10 @@ a {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.control-bar__filters {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .control-bar__field {
   display: grid;
   gap: 8px;
@@ -694,6 +698,7 @@ a {
 }
 
 .digest-section__topics,
+.entry-card__therapies,
 .entry-card__taxonomy,
 .entry-card__badges {
   display: flex;
@@ -707,6 +712,7 @@ a {
 
 .digest-section__topic,
 .entry-card__tag,
+.entry-card__therapy-tag,
 .entry-card__taxonomy-tag,
 .entry-card__evidence {
   display: inline-flex;
@@ -720,7 +726,13 @@ a {
   letter-spacing: 0.04em;
 }
 
+.entry-card__therapy-tag {
+  background: rgba(24, 86, 162, 0.1);
+  color: var(--journal);
+}
+
 .entry-card__tag--overflow,
+.entry-card__therapy-tag--overflow,
 .entry-card__taxonomy-tag--overflow {
   background: transparent;
   border: 1px dashed var(--line);
@@ -912,6 +924,10 @@ a {
   color: var(--text);
   font-size: 0.95rem;
   line-height: 1.5;
+}
+
+.entry-card__therapies {
+  margin: 0 0 12px;
 }
 
 .entry-card__taxonomy {

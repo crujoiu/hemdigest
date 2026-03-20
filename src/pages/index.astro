@@ -123,6 +123,12 @@ const initialDigest = await getDigestData();
             <option value="all">All audiences</option>
           </select>
         </div>
+        <div class="control-bar__field">
+          <label class="control-bar__label" for="therapy-filter">Therapy</label>
+          <select id="therapy-filter" class="control-bar__select">
+            <option value="all">All therapies</option>
+          </select>
+        </div>
       </div>
       <div class="control-bar__actions">
         <div class="control-bar__field">
@@ -154,7 +160,6 @@ const initialDigest = await getDigestData();
   </button>
 
   <footer class="site-footer">
-    <p>Built with Astro and backed by a small TypeScript API.</p>
     <p>For educational and informational purposes only. Always verify against primary sources.</p>
   </footer>
 

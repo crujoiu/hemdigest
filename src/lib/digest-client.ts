@@ -1,4 +1,4 @@
-import type { AudienceTag, ContentTag, DigestDiagnostic, DigestEntry, DigestPayload, DigestSection, TopicTag } from "./digest-types";
+import type { AudienceTag, ContentTag, DigestDiagnostic, DigestEntry, DigestPayload, DigestSection, TherapyTag, TopicTag } from "./digest-types";
 
 const SECTION_PAGE_SIZE = 12;
 const THEME_STORAGE_KEY = "theme";
@@ -21,6 +21,14 @@ const DOMAIN_SEARCH_CONCEPTS: Array<{ topic: TopicTag; aliases: string[] }> = [
   { topic: "thrombosis", aliases: ["thrombosis", "thromboembolism", "vte", "coagulation", "venous thromboembolism"] },
   { topic: "transplant", aliases: ["transplant", "hsct", "bmt", "bone marrow transplant", "stem cell transplant"] },
   { topic: "benign", aliases: ["benign hematology", "itp", "hemophilia", "thalassemia"] }
+];
+const THERAPY_SEARCH_CONCEPTS: Array<{ tag: TherapyTag; aliases: string[] }> = [
+  { tag: "car-t", aliases: ["car-t", "cart", "chimeric antigen receptor t", "cell therapy"] },
+  { tag: "bispecific", aliases: ["bispecific", "bispecific antibody", "t-cell engager", "t cell engager"] },
+  { tag: "anticoagulation", aliases: ["anticoagulation", "doac", "warfarin", "heparin", "apixaban", "rivaroxaban"] },
+  { tag: "transplant-conditioning", aliases: ["conditioning", "myeloablative", "reduced intensity", "nonmyeloablative"] },
+  { tag: "stem-cell-transplant", aliases: ["hsct", "bmt", "stem cell transplant", "bone marrow transplant", "allogeneic transplant"] },
+  { tag: "targeted-therapy", aliases: ["targeted therapy", "tki", "jak inhibitor", "btk inhibitor", "tyrosine kinase inhibitor"] }
 ];
 
 function getRequiredElement<T extends HTMLElement>(id: string): T {
@@ -55,6 +63,7 @@ function hasDigestPageElements(): boolean {
     "topic-filter",
     "content-filter",
     "audience-filter",
+    "therapy-filter",
     "preset-filter",
     "search-assist",
     "bookmarks-toggle",
@@ -80,6 +89,10 @@ function escapeAttribute(value: string): string {
 }
 
 function titleCase(value: string): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+
   return value
     .replace(/-/g, " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
@@ -110,6 +123,27 @@ function renderNav(target: HTMLElement, sections: DigestSection[]): void {
 function renderEntryTags(values: string[], className: string): string {
   return values
     .map((value) => `<span class="${className}">${escapeHtml(titleCase(value))}</span>`)
+    .join("");
+}
+
+function formatTherapyLabel(value: TherapyTag): string {
+  switch (value) {
+    case "car-t":
+      return "CAR-T";
+    case "transplant-conditioning":
+      return "Conditioning";
+    case "stem-cell-transplant":
+      return "Stem Cell Transplant";
+    case "targeted-therapy":
+      return "Targeted Therapy";
+    default:
+      return titleCase(value);
+  }
+}
+
+function renderTherapyTags(values: TherapyTag[], className: string): string {
+  return values
+    .map((value) => `<span class="${className}">${escapeHtml(formatTherapyLabel(value))}</span>`)
     .join("");
 }
 
@@ -199,6 +233,8 @@ function renderEntries(entries: DigestEntry[], searchQuery = ""): string {
       (entry) => {
         const visibleTopics = entry.topics.filter((topic) => topic !== "general").slice(0, 2);
         const hiddenTopicCount = Math.max(entry.topics.filter((topic) => topic !== "general").length - visibleTopics.length, 0);
+        const visibleTherapies = entry.therapySignals.slice(0, 2);
+        const hiddenTherapyCount = Math.max(entry.therapySignals.length - visibleTherapies.length, 0);
         const taxonomyTags = [...entry.contentTypes, ...entry.audiences];
         const visibleTaxonomyTags = taxonomyTags.slice(0, 3);
         const hiddenTaxonomyCount = Math.max(taxonomyTags.length - visibleTaxonomyTags.length, 0);
@@ -243,6 +279,10 @@ function renderEntries(entries: DigestEntry[], searchQuery = ""): string {
           <div class="entry-card__why-block">
             <p class="entry-card__why-label">Why it matters</p>
             <p class="entry-card__why">${escapeHtml(entry.whyItMatters.summary)}</p>
+          </div>
+          <div class="entry-card__therapies">
+            ${renderTherapyTags(visibleTherapies, "entry-card__therapy-tag")}
+            ${renderOverflowTag(hiddenTherapyCount, "entry-card__therapy-tag")}
           </div>
           <div class="entry-card__taxonomy">
             ${renderEntryTags(visibleTaxonomyTags, "entry-card__taxonomy-tag")}
@@ -291,6 +331,7 @@ interface FilterState {
   topic: TopicTag | "all";
   contentType: ContentTag | "all";
   audience: AudienceTag | "all";
+  therapy: TherapyTag | "all";
   bookmarksOnly: boolean;
   newOnly: boolean;
   activePresetId: string;
@@ -310,15 +351,21 @@ function writeJsonStorage<T>(key: string, value: T): void {
 }
 
 function getInitialFilterState(): FilterState {
-  return readJsonStorage<FilterState>(FILTER_STORAGE_KEY, {
+  const defaults: FilterState = {
     search: "",
     topic: "all",
     contentType: "all",
     audience: "all",
+    therapy: "all",
     bookmarksOnly: false,
     newOnly: false,
     activePresetId: ""
-  });
+  };
+
+  return {
+    ...defaults,
+    ...readJsonStorage<Partial<FilterState>>(FILTER_STORAGE_KEY, defaults)
+  };
 }
 
 function getBookmarks(): string[] {
@@ -392,14 +439,31 @@ function findMatchingSearchConcepts(query: string): Array<{ topic: TopicTag; ali
   );
 }
 
+function findMatchingTherapyConcepts(query: string): Array<{ tag: TherapyTag; aliases: string[] }> {
+  const normalizedQuery = normalizeSearchText(query);
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  return THERAPY_SEARCH_CONCEPTS.filter((therapy) =>
+    therapy.aliases.some((alias) => normalizedQuery.includes(alias) || alias.includes(normalizedQuery))
+  );
+}
+
 function getTopicDisplayLabel(topic: TopicTag): string {
   return topic === "aml" || topic === "mpn" ? topic.toUpperCase() : titleCase(topic);
 }
 
+function getTherapyDisplayLabel(therapy: TherapyTag): string {
+  return therapy ? formatTherapyLabel(therapy) : "Therapy";
+}
+
 function renderSearchAssist(target: HTMLElement, filterState: FilterState): void {
   const matchingConcepts = findMatchingSearchConcepts(filterState.search).slice(0, 2);
+  const matchingTherapies = findMatchingTherapyConcepts(filterState.search).slice(0, 2);
 
-  if (matchingConcepts.length === 0 && !filterState.search) {
+  if (matchingConcepts.length === 0 && matchingTherapies.length === 0 && !filterState.search) {
     const quickStarts = [
       { label: "AML", query: "AML" },
       { label: "Multiple myeloma", query: "multiple myeloma" },
@@ -424,12 +488,12 @@ function renderSearchAssist(target: HTMLElement, filterState: FilterState): void
     return;
   }
 
-  if (matchingConcepts.length === 0) {
+  if (matchingConcepts.length === 0 && matchingTherapies.length === 0) {
     target.innerHTML = "";
     return;
   }
 
-  target.innerHTML = matchingConcepts
+  const topicMarkup = matchingConcepts
     .map((concept) => {
       const leadAlias = concept.aliases.find((alias) => alias.length > concept.topic.length) ?? concept.aliases[0];
 
@@ -448,6 +512,23 @@ function renderSearchAssist(target: HTMLElement, filterState: FilterState): void
       `;
     })
     .join("");
+
+  const therapyMarkup = matchingTherapies
+    .map(
+      (therapy) => `
+          <div class="search-assist__group">
+            <p class="search-assist__label">Recognized ${escapeHtml(filterState.search)} as ${escapeHtml(getTherapyDisplayLabel(therapy.tag))}</p>
+            <div class="search-assist__actions">
+              <button class="search-assist__chip" type="button" data-therapy-value="${escapeAttribute(therapy.tag)}">
+                Filter to ${escapeHtml(getTherapyDisplayLabel(therapy.tag))}
+              </button>
+            </div>
+          </div>
+        `
+      )
+    .join("");
+
+  target.innerHTML = `${topicMarkup}${therapyMarkup}`;
 }
 
 function getSearchScore(entry: DigestEntry, query: string): number {
@@ -532,6 +613,10 @@ function matchesFilter(entry: DigestEntry, filterState: FilterState, bookmarks: 
     return false;
   }
 
+  if (filterState.therapy !== "all" && !entry.therapySignals.includes(filterState.therapy)) {
+    return false;
+  }
+
   if (filterState.bookmarksOnly && !bookmarks.has(entry.id)) {
     return false;
   }
@@ -572,8 +657,16 @@ function renderOverview(
   const filteredTopicActivity = activeTopics
     .map((topic) => ({
       topic,
-      label: titleCase(topic),
+      label: getTopicDisplayLabel(topic),
       count: filteredEntries.filter((entry) => entry.topics.includes(topic)).length
+    }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+  const activeTherapies = Array.from(new Set(filteredEntries.flatMap((entry) => entry.therapySignals)));
+  const filteredTherapyActivity = activeTherapies
+    .map((therapy) => ({
+      therapy,
+      label: getTherapyDisplayLabel(therapy),
+      count: filteredEntries.filter((entry) => entry.therapySignals.includes(therapy)).length
     }))
     .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
   const spotlightEntries = filteredEntries
@@ -587,18 +680,21 @@ function renderOverview(
     filterState.topic !== "all" ||
     filterState.contentType !== "all" ||
     filterState.audience !== "all" ||
+    filterState.therapy !== "all" ||
     filterState.bookmarksOnly ||
     filterState.newOnly ||
     Boolean(filterState.activePresetId);
   const topicActivity = filteredTopicActivity.slice(0, 3).map((item) => `${item.label} ${item.count}`).join(" • ");
+  const therapyActivity = filteredTherapyActivity.slice(0, 2).map((item) => `${item.label} ${item.count}`).join(" • ");
 
   healthEl.textContent = hasActiveFilters
-    ? `${filteredEntries.length} filtered results across ${filteredSections.length} streams. ${topicActivity || "Refine filters to focus the briefing further."}`
-    : `${healthy}/${total} source pipelines healthy. ${topicActivity || "Topic activity will appear as feeds populate."}`;
+    ? `${filteredEntries.length} filtered results across ${filteredSections.length} streams. ${therapyActivity || topicActivity || "Refine filters to focus the briefing further."}`
+    : `${healthy}/${total} source pipelines healthy. ${therapyActivity || topicActivity || "Topic activity will appear as feeds populate."}`;
   metricsEl.innerHTML = [
     `<article class="overview-card"><p class="overview-card__label">${hasActiveFilters ? "Visible results" : "Top developments"}</p><strong>${hasActiveFilters ? filteredEntries.length : payload.overview.topDevelopments.length}</strong></article>`,
     `<article class="overview-card"><p class="overview-card__label">${hasActiveFilters ? "Visible streams" : "Duplicates removed"}</p><strong>${hasActiveFilters ? filteredSections.length : payload.dedupedEntries}</strong></article>`,
-    `<article class="overview-card"><p class="overview-card__label">Active topics</p><strong>${filteredTopicActivity.length}</strong></article>`
+    `<article class="overview-card"><p class="overview-card__label">Active topics</p><strong>${filteredTopicActivity.length}</strong></article>`,
+    `<article class="overview-card"><p class="overview-card__label">Active therapies</p><strong>${filteredTherapyActivity.length}</strong></article>`
   ].join("");
   spotlightEl.innerHTML = (hasActiveFilters
     ? spotlightEntries.map((entry) => ({
@@ -608,6 +704,7 @@ function renderOverview(
         source: entry.source,
         link: entry.link,
         topic: entry.topics.find((topic) => topic !== "general") ?? "general",
+        therapySignal: entry.therapySignals[0] ?? null,
         type: entry.type,
         score: entry.score,
         published: entry.publishedIso ?? entry.published,
@@ -618,7 +715,7 @@ function renderOverview(
     .map(
       (item) => `
         <article class="spotlight-card spotlight-card--${escapeAttribute(item.type)}">
-          <p class="spotlight-card__eyebrow">${escapeHtml(titleCase(item.topic))} • ${escapeHtml(titleCase(item.evidenceLevel))}</p>
+          <p class="spotlight-card__eyebrow">${escapeHtml(item.therapySignal ? `${getTherapyDisplayLabel(item.therapySignal)} • ${getTopicDisplayLabel(item.topic)}` : getTopicDisplayLabel(item.topic))} • ${escapeHtml(titleCase(item.evidenceLevel))}</p>
           <h3><a href="${escapeAttribute(item.link)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a></h3>
           <p>${escapeHtml(item.summary)}</p>
           <div class="spotlight-card__actions">
@@ -626,9 +723,10 @@ function renderOverview(
               class="spotlight-card__button"
               type="button"
               data-spotlight-topic="${escapeAttribute(item.topic)}"
+              data-spotlight-therapy="${item.therapySignal ? escapeAttribute(item.therapySignal) : ""}"
               data-spotlight-type="${escapeAttribute(item.type)}"
             >
-              Focus ${escapeHtml(titleCase(item.topic))}
+              Focus ${escapeHtml(item.therapySignal ? getTherapyDisplayLabel(item.therapySignal) : getTopicDisplayLabel(item.topic))}
             </button>
           </div>
           <div class="spotlight-card__meta">
@@ -657,7 +755,7 @@ function renderOverview(
           data-preset-id="${escapeAttribute(preset.id)}"
           aria-pressed="${String(preset.id === activePresetId)}"
         >
-          ${escapeHtml(preset.label)}
+          ${escapeHtml(preset.therapy !== "all" ? `${preset.label} • ${getTherapyDisplayLabel(preset.therapy)}` : preset.label)}
         </button>
       `
     )
@@ -723,6 +821,15 @@ function renderActiveFilters(target: HTMLElement, filterState: FilterState, dige
         </button>
       `);
     }
+
+    if (filterState.therapy !== "all") {
+      chips.push(`
+        <button class="active-filters__chip" type="button" data-filter-key="therapy">
+          <span>Therapy: ${escapeHtml(getTherapyDisplayLabel(filterState.therapy))}</span>
+          <span aria-hidden="true">Remove</span>
+        </button>
+      `);
+    }
   }
 
   if (filterState.search) {
@@ -783,6 +890,10 @@ function getEmptyStateActions(filterState: FilterState): Array<{ key: string; la
     if (filterState.audience !== "all") {
       actions.push({ key: "audience", label: "Show all audiences" });
     }
+
+    if (filterState.therapy !== "all") {
+      actions.push({ key: "therapy", label: "Show all therapies" });
+    }
   }
 
   if (filterState.bookmarksOnly) {
@@ -808,6 +919,7 @@ function clearFilter(filterState: FilterState, filterKey: string): boolean {
       filterState.topic = "all";
       filterState.contentType = "all";
       filterState.audience = "all";
+      filterState.therapy = "all";
       filterState.bookmarksOnly = false;
       filterState.newOnly = false;
       filterState.activePresetId = "";
@@ -826,6 +938,10 @@ function clearFilter(filterState: FilterState, filterKey: string): boolean {
       return true;
     case "audience":
       filterState.audience = "all";
+      filterState.activePresetId = "";
+      return true;
+    case "therapy":
+      filterState.therapy = "all";
       filterState.activePresetId = "";
       return true;
     case "bookmarksOnly":
@@ -911,6 +1027,9 @@ function renderSections(
       if (filterState.audience !== "all") {
         activeLabels.push(`audience ${titleCase(filterState.audience)}`);
       }
+      if (filterState.therapy !== "all") {
+        activeLabels.push(`therapy ${getTherapyDisplayLabel(filterState.therapy)}`);
+      }
     }
     if (filterState.search) {
       activeLabels.push(`search "${filterState.search}"`);
@@ -935,7 +1054,7 @@ function renderSections(
     target.innerHTML = `
       <div class="empty-state empty-state--interactive">
         <p>No entries match the current filters.</p>
-        <p>${escapeHtml(activeLabels.length > 0 ? `Current constraints: ${activeLabels.join(" • ")}.` : "Try widening topic, content, audience, or bookmark filters.")}</p>
+        <p>${escapeHtml(activeLabels.length > 0 ? `Current constraints: ${activeLabels.join(" • ")}.` : "Try widening topic, content, audience, therapy, or bookmark filters.")}</p>
         <div class="empty-state__actions">${actionsMarkup}</div>
       </div>
     `;
@@ -1216,6 +1335,7 @@ export function initDigestPage(endpoint = "/api/digest"): void {
   const topicFilterEl = getRequiredElement<HTMLSelectElement>("topic-filter");
   const contentFilterEl = getRequiredElement<HTMLSelectElement>("content-filter");
   const audienceFilterEl = getRequiredElement<HTMLSelectElement>("audience-filter");
+  const therapyFilterEl = getRequiredElement<HTMLSelectElement>("therapy-filter");
   const presetFilterEl = getRequiredElement<HTMLSelectElement>("preset-filter");
   const bookmarksToggleEl = getRequiredElement<HTMLButtonElement>("bookmarks-toggle");
   const newToggleEl = getRequiredElement<HTMLButtonElement>("new-toggle");
@@ -1275,16 +1395,26 @@ export function initDigestPage(endpoint = "/api/digest"): void {
     const topics = Array.from(new Set(allEntries.flatMap((entry) => entry.topics).filter((topic) => topic !== "general")));
     const contentTypes = Array.from(new Set(allEntries.flatMap((entry) => entry.contentTypes)));
     const audiences = Array.from(new Set(allEntries.flatMap((entry) => entry.audiences)));
+    const therapies = Array.from(new Set(allEntries.flatMap((entry) => entry.therapySignals)));
 
     searchEl.value = filterState.search;
     renderSearchAssist(searchAssistEl, filterState);
     populateSelect(topicFilterEl, topics, "All topics", filterState.topic);
     populateSelect(contentFilterEl, contentTypes, "All content", filterState.contentType);
     populateSelect(audienceFilterEl, audiences, "All audiences", filterState.audience);
+    therapyFilterEl.innerHTML = ['<option value="all">All therapies</option>']
+      .concat(
+        therapies.map((therapy) => `<option value="${escapeAttribute(therapy)}">${escapeHtml(getTherapyDisplayLabel(therapy))}</option>`)
+      )
+      .join("");
+    therapyFilterEl.value = filterState.therapy;
     presetFilterEl.innerHTML = ['<option value="">Choose preset</option>']
       .concat(
         activePayload.overview.savedPresetSuggestions.map(
-          (preset) => `<option value="${escapeAttribute(preset.id)}">${escapeHtml(preset.label)}</option>`
+          (preset) =>
+            `<option value="${escapeAttribute(preset.id)}">${escapeHtml(
+              preset.therapy !== "all" ? `${preset.label} • ${getTherapyDisplayLabel(preset.therapy)}` : preset.label
+            )}</option>`
         )
       )
       .join("");
@@ -1298,6 +1428,7 @@ export function initDigestPage(endpoint = "/api/digest"): void {
     filterState.topic = "all";
     filterState.contentType = "all";
     filterState.audience = "all";
+    filterState.therapy = "all";
     filterState.bookmarksOnly = false;
     filterState.newOnly = false;
     filterState.activePresetId = "";
@@ -1316,6 +1447,7 @@ export function initDigestPage(endpoint = "/api/digest"): void {
     filterState.topic = preset.topic;
     filterState.contentType = preset.contentType;
     filterState.audience = preset.audience;
+    filterState.therapy = preset.therapy;
     filterState.search = "";
     filterState.activePresetId = preset.id;
     syncControls();
@@ -1323,8 +1455,9 @@ export function initDigestPage(endpoint = "/api/digest"): void {
     renderActivePayload();
   };
 
-  const focusSpotlight = (topic: TopicTag | "all", type: string): void => {
+  const focusSpotlight = (topic: TopicTag | "all", therapy: TherapyTag | "all", type: string): void => {
     filterState.topic = topic;
+    filterState.therapy = therapy;
     filterState.contentType = "all";
     filterState.audience = "all";
     filterState.search = "";
@@ -1370,13 +1503,14 @@ export function initDigestPage(endpoint = "/api/digest"): void {
 
     const button = target.closest<HTMLButtonElement>(".spotlight-card__button");
     const topic = button?.dataset.spotlightTopic as TopicTag | undefined;
+    const therapy = (button?.dataset.spotlightTherapy as TherapyTag | undefined) ?? "all";
     const type = button?.dataset.spotlightType;
 
     if (!button || !topic || !type) {
       return;
     }
 
-    focusSpotlight(topic, type);
+    focusSpotlight(topic, therapy, type);
   });
 
   searchEl.addEventListener("input", () => {
@@ -1407,6 +1541,11 @@ export function initDigestPage(endpoint = "/api/digest"): void {
       filterState.activePresetId = "";
     }
 
+    if (button.dataset.therapyValue) {
+      filterState.therapy = button.dataset.therapyValue as TherapyTag | "all";
+      filterState.activePresetId = "";
+    }
+
     syncControls();
     persistFilters();
     renderActivePayload();
@@ -1428,6 +1567,13 @@ export function initDigestPage(endpoint = "/api/digest"): void {
 
   audienceFilterEl.addEventListener("change", () => {
     filterState.audience = audienceFilterEl.value as AudienceTag | "all";
+    filterState.activePresetId = "";
+    persistFilters();
+    renderActivePayload();
+  });
+
+  therapyFilterEl.addEventListener("change", () => {
+    filterState.therapy = therapyFilterEl.value as TherapyTag | "all";
     filterState.activePresetId = "";
     persistFilters();
     renderActivePayload();

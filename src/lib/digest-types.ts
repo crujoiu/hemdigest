@@ -13,6 +13,13 @@ export type TopicTag =
 export type ContentTag = "trial" | "review" | "guideline" | "approval" | "conference" | "news-update" | "research";
 export type AudienceTag = "clinicians" | "researchers" | "industry" | "patients";
 export type EvidenceLevel = "guideline" | "phase-3" | "phase-2" | "observational" | "review" | "news";
+export type TherapyTag =
+  | "car-t"
+  | "bispecific"
+  | "anticoagulation"
+  | "transplant-conditioning"
+  | "stem-cell-transplant"
+  | "targeted-therapy";
 
 export interface EvidenceSnapshot {
   level: EvidenceLevel;
@@ -37,6 +44,7 @@ export interface DigestEntry {
   source: string;
   type: EntryType;
   topics: TopicTag[];
+  therapySignals: TherapyTag[];
   contentTypes: ContentTag[];
   audiences: AudienceTag[];
   evidence: EvidenceSnapshot;
@@ -67,6 +75,7 @@ export interface DigestTopDevelopment {
   source: string;
   link: string;
   topic: TopicTag;
+  therapySignal?: TherapyTag | null;
   type: EntryType;
   score: number;
   published: string;
@@ -85,14 +94,22 @@ export interface DigestFeedHealth {
   degradedSources: number;
 }
 
+export interface DigestTherapyActivity {
+  therapy: TherapyTag;
+  label: string;
+  count: number;
+}
+
 export interface DigestOverview {
   topDevelopments: DigestTopDevelopment[];
   topicActivity: DigestTopicActivity[];
+  therapyActivity: DigestTherapyActivity[];
   sourceHealth: DigestFeedHealth;
   savedPresetSuggestions: Array<{
     id: string;
     label: string;
     topic: TopicTag | "all";
+    therapy: TherapyTag | "all";
     contentType: ContentTag | "all";
     audience: AudienceTag | "all";
   }>;
