@@ -60,3 +60,11 @@ No daily rebuild hook is needed in this architecture because the frontend reads 
 - change UI in `src/pages/index.astro` and `src/styles/global.css`
 
 Current note: the `News & Updates` section is currently backed by ASH newsroom press releases parsed from HTML, not a broader multi-source RSS news feed.
+
+## TODO
+
+- [ ] Add historical persistence for digests and entry snapshots so the app can support trending topics/therapies, real "new since" views, weekly comparisons, and source reliability tracking over time.
+- [ ] Improve evidence extraction beyond title/abstract heuristics, especially for trial phase, sample size, approval/guideline detection, and study design normalization.
+- [ ] Add personalized monitoring features such as saved topic/therapy/content presets, email or RSS alerts, and watchlists built from bookmarks.
+- [ ] Harden search and taxonomy with better canonical mappings for drug names, brand/generic aliases, disease subtypes, modality classes, and conference acronyms.
+- [ ] Run a frontend simplification pass to reduce UI density, especially in the overview, control bar, entry metadata, and mobile layouts.
